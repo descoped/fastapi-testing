@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "fastapi-testing"
+version = "0.1.0"
+description = "A testing toolkit for FastAPI applications"
+authors = ["Ove Ranheim <oranheim@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "fastapi_testing", from = "src" }]
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Framework :: FastAPI",
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.110.0"
+httpx = {extras = ["http2"], version = "^0.28.1"}
+uvicorn = "^0.27.1"
+starlette = "^0.36.3"
+pydantic = "^2.10.6"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.25.2"
+flake8 = "^6.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "asyncio: mark test as async",
+]
+
+[[tool.poetry.source]]
+name = "testpypi"
+url = "https://test.pypi.org/"
+priority = "supplemental"

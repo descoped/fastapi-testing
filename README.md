@@ -15,7 +15,7 @@ A lightweight, async-first testing framework designed specifically for FastAPI a
 ## Installation
 
 ```bash
-pip install fastapi-testing  # Note: Update with actual package name
+pip install fastapi-testing
 ```
 
 ## Quick Start

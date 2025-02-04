@@ -214,7 +214,7 @@ The framework provides clear error messages for common issues:
 ## Limitations
 
 - Only supports async test cases
-- Requires Python 3.7+
+- Requires Python 3.11+
 - Designed specifically for FastAPI applications
 
 ## Contributing

@@ -1,9 +1,9 @@
 [tool.poetry]
 name = "fastapi-testing"
 version = "0.1.0"
-description = "A testing toolkit for FastAPI applications"
+description = "A lightweight, async-first testing framework for FastAPI applications"
 authors = ["Ove Ranheim <oranheim@gmail.com>"]
-readme = "README.md"
+readme = "docs/index.rst"
 packages = [{ include = "fastapi_testing", from = "src" }]
 license = "MIT"
 classifiers = [
@@ -13,20 +13,30 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Framework :: FastAPI",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed"
 ]
+homepage = "https://github.com/descoped/fastapi-testing"
+repository = "https://github.com/descoped/fastapi-testing"
+documentation = "https://github.com/descoped/fastapi-testing/tree/main/docs"
+keywords = ["fastapi", "testing", "async", "pytest", "integration-testing", "test-framework"]
+
 
 [tool.poetry.dependencies]
 python = "^3.11"
-fastapi = "^0.110.0"
-httpx = {extras = ["http2"], version = "^0.28.1"}
-uvicorn = "^0.27.1"
-starlette = "^0.36.3"
+fastapi = "^0.115.0"
+httpx = { extras = ["http2"], version = "^0.28.1" }
+uvicorn = "^0.34.0"
+starlette = "^0.45.0"
 pydantic = "^2.10.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
 pytest-asyncio = "^0.25.2"
-flake8 = "^6.1.0"
+flake8 = "^7.1.0"
+restructuredtext-lint = "^1.4.0"
+pygments = "^2.19.1"
 
 [build-system]
 requires = ["poetry-core"]
@@ -40,8 +50,3 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "asyncio: mark test as async",
 ]
-
-[[tool.poetry.source]]
-name = "testpypi"
-url = "https://test.pypi.org/"
-priority = "supplemental"

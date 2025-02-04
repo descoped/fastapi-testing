@@ -19,7 +19,7 @@ classifiers = [
 ]
 homepage = "https://github.com/descoped/fastapi-testing"
 repository = "https://github.com/descoped/fastapi-testing"
-documentation = "https://github.com/descoped/fastapi-testing/tree/main/docs"
+documentation = "https://github.com/descoped/fastapi-testing/tree/master/docs"
 keywords = ["fastapi", "testing", "async", "pytest", "integration-testing", "test-framework"]
 
 

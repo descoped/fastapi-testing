@@ -26,7 +26,7 @@ keywords = ["fastapi", "testing", "async", "pytest", "integration-testing", "tes
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = "^0.115.0"
-httpx = { extras = ["http2"], version = "^0.28.1" }
+httpx = { extras = ["http2"], version = ">=0.23.0,<0.28.0" }
 uvicorn = "^0.34.0"
 starlette = "^0.45.0"
 pydantic = "^2.10.6"

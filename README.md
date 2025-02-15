@@ -47,40 +47,40 @@ The following sequence diagram illustrates the lifecycle of a test using this fr
 ```mermaid
 sequenceDiagram
     participant Test
-    participant TestServer
+    participant AsyncTestServer
     participant PortGenerator
     participant UvicornServer
     participant FastAPI
-    participant TestClient
+    participant AsyncTestClient
 
-    Test->>+TestServer: create_test_server()
-    TestServer->>+PortGenerator: get_port()
-    PortGenerator-->>-TestServer: available port
+    Test->>+AsyncTestServer: create_test_server()
+    AsyncTestServer->>+PortGenerator: get_port()
+    PortGenerator-->>-AsyncTestServer: available port
     
-    TestServer->>+UvicornServer: initialize
+    AsyncTestServer->>+UvicornServer: initialize
     UvicornServer->>FastAPI: configure
     
-    TestServer->>+UvicornServer: start()
+    AsyncTestServer->>+UvicornServer: start()
     UvicornServer->>FastAPI: startup event
-    UvicornServer-->>TestServer: server ready
+    UvicornServer-->>AsyncTestServer: server ready
     
-    TestServer->>+TestClient: initialize
-    TestClient-->>-TestServer: client ready
-    TestServer-->>-Test: server instance
+    AsyncTestServer->>+AsyncTestClient: initialize
+    AsyncTestClient-->>-AsyncTestServer: client ready
+    AsyncTestServer-->>-Test: server instance
     
-    Note over Test,TestClient: Test execution happens here
+    Note over Test,AsyncTestClient: Test execution happens here
     
-    Test->>+TestServer: cleanup (context exit)
-    TestServer->>+TestClient: close()
-    TestClient-->>-TestServer: closed
+    Test->>+AsyncTestServer: cleanup (context exit)
+    AsyncTestServer->>+AsyncTestClient: close()
+    AsyncTestClient-->>-AsyncTestServer: closed
     
-    TestServer->>+UvicornServer: shutdown
+    AsyncTestServer->>+UvicornServer: shutdown
     UvicornServer->>FastAPI: shutdown event
-    UvicornServer-->>-TestServer: shutdown complete
+    UvicornServer-->>-AsyncTestServer: shutdown complete
     
-    TestServer->>+PortGenerator: release_port()
-    PortGenerator-->>-TestServer: port released
-    TestServer-->>-Test: cleanup complete
+    AsyncTestServer->>+PortGenerator: release_port()
+    PortGenerator-->>-AsyncTestServer: port released
+    AsyncTestServer-->>-Test: cleanup complete
 ```
 
 The diagram shows how the different components interact during:
@@ -92,9 +92,9 @@ The diagram shows how the different components interact during:
 
 ## Key Components
 
-### TestServer
+### AsyncTestServer
 
-The `TestServer` class is the core component that manages the lifecycle of your test FastAPI application:
+The `AsyncTestServer` class is the core component that manages the lifecycle of your test FastAPI application:
 
 ```python
 from fastapi_testing import AsyncTestServer
@@ -118,9 +118,9 @@ async with create_test_server() as server:
     pass  # Server automatically starts and stops
 ```
 
-### TestClient
+### AsyncTestClient
 
-The `TestClient` provides methods for making HTTP requests to your test server:
+The `AsyncTestClient` provides methods for making HTTP requests to your test server:
 
 ```python
 # Available HTTP methods
@@ -133,7 +133,7 @@ await server.client.patch("/path", json=data)
 
 ### Response Assertions
 
-The `TestResponse` class provides convenient methods for assertions:
+The `AsyncTestResponse` class provides convenient methods for assertions:
 
 ```python
 response = await server.client.get("/path")
@@ -143,6 +143,62 @@ text = await response.text()       # Get text response
 ```
 
 ## Advanced Usage
+
+### Advanced Server Configuration
+
+You can customize the server lifecycle using a reusable test fixture:
+
+```python
+@pytest.fixture
+async def test_server(
+    test_settings: Settings,
+    transaction_manager: TransactionManager
+) -> AsyncGenerator[AsyncTestServer, None]:
+    """Create test server with overridden settings and database connection"""
+
+    async def custom_lifespan(app: AppType) -> AsyncGenerator[None, Any]:
+        # Wire up test-specific dependencies
+        app.dependency_overrides.update({
+            get_settings: lambda: test_settings,
+            get_transaction_manager: lambda: transaction_manager,
+            get_db_pool: lambda: transaction_manager.pool
+        })
+
+        # Initialize test database with our pool
+        db._pool = transaction_manager.pool
+
+        yield  # Server handles requests during this period
+
+        # Cleanup after tests complete
+        await db.cleanup()
+
+    async with create_test_server(lifespan=custom_lifespan) as server:
+        yield server
+```
+
+### Testing Routes and Routers
+
+You can test entire routers and complex route configurations:
+
+```python
+@pytest.mark.asyncio
+async def test_api(test_server: AsyncTestServer):
+    # Register routes/routers
+    test_server.app.include_router(your_router)
+
+    # Make requests
+    response = await test_server.client.get("/your-endpoint")
+    await response.expect_status(200)
+    
+    # Test concurrent requests
+    responses = await asyncio.gather(*[
+        test_server.client.get("/endpoint")
+        for _ in range(5)
+    ])
+    
+    for response in responses:
+        await response.expect_status(200)
+```
 
 ### Lifecycle Management
 
@@ -188,7 +244,7 @@ async with create_test_server() as server:
 You can customize the server behavior:
 
 ```python
-server = TestServer(
+server = AsyncTestServer(
     startup_timeout=30.0,    # Seconds to wait for server startup
     shutdown_timeout=10.0,   # Seconds to wait for server shutdown
 )

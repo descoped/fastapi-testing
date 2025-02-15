@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fastapi-testing"
-version = "0.1.2"
+version = "0.2.0"
 description = "A lightweight, async-first testing framework for FastAPI applications"
 authors = ["Ove Ranheim <oranheim@gmail.com>"]
 readme = "docs/index.rst"

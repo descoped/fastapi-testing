@@ -63,7 +63,7 @@ class UvicornTestServer(uvicorn.Server):
         self.startup_handler.set()
 
 
-class TestServer:
+class AsyncTestServer:
     def __init__(
         self,
         lifespan: Optional[Lifespan[AppType]] = None,
@@ -78,7 +78,7 @@ class TestServer:
         self._server_task: Optional[asyncio.Task] = None
         self._port: Optional[int] = None
         self._host = "127.0.0.1"
-        self._client: Optional[TestClient] = None
+        self._client: Optional[AsyncTestClient] = None
         self._server: Optional[UvicornTestServer] = None
 
     async def start(self) -> None:
@@ -107,7 +107,7 @@ class TestServer:
             await asyncio.wait_for(startup_handler.wait(), timeout=self.startup_timeout)
 
             # Initialize test client after server is confirmed running
-            self._client = TestClient(
+            self._client = AsyncTestClient(
                 base_url=self.base_url,
                 timeout=self.startup_timeout
             )
@@ -164,7 +164,7 @@ class TestServer:
             raise RuntimeError("Server is not running")
         return f"http://{self._host}:{self._port}"
 
-    async def __aenter__(self) -> 'TestServer':
+    async def __aenter__(self) -> 'AsyncTestServer':
         await self.start()
         return self
 
@@ -172,13 +172,13 @@ class TestServer:
         await self.stop()
 
     @property
-    def client(self) -> 'TestClient':
+    def client(self) -> 'AsyncTestClient':
         if not self._client:
             raise RuntimeError("Server is not running")
         return self._client
 
 
-class TestClient:
+class AsyncTestClient:
     def __init__(
             self,
             base_url: str,
@@ -204,27 +204,27 @@ class TestClient:
             method: str,
             url: str,
             **kwargs: Any
-    ) -> 'TestResponse':
+    ) -> 'AsyncTestResponse':
         response = await self._client.request(method, url, **kwargs)
-        return TestResponse(response)
+        return AsyncTestResponse(response)
 
-    async def get(self, url: str, **kwargs: Any) -> 'TestResponse':
+    async def get(self, url: str, **kwargs: Any) -> 'AsyncTestResponse':
         return await self.request('GET', url, **kwargs)
 
-    async def post(self, url: str, **kwargs: Any) -> 'TestResponse':
+    async def post(self, url: str, **kwargs: Any) -> 'AsyncTestResponse':
         return await self.request('POST', url, **kwargs)
 
-    async def put(self, url: str, **kwargs: Any) -> 'TestResponse':
+    async def put(self, url: str, **kwargs: Any) -> 'AsyncTestResponse':
         return await self.request('PUT', url, **kwargs)
 
-    async def delete(self, url: str, **kwargs: Any) -> 'TestResponse':
+    async def delete(self, url: str, **kwargs: Any) -> 'AsyncTestResponse':
         return await self.request('DELETE', url, **kwargs)
 
-    async def patch(self, url: str, **kwargs: Any) -> 'TestResponse':
+    async def patch(self, url: str, **kwargs: Any) -> 'AsyncTestResponse':
         return await self.request('PATCH', url, **kwargs)
 
 
-class TestResponse:
+class AsyncTestResponse:
     def __init__(self, response: httpx.Response):
         self._response = response
 
@@ -237,7 +237,7 @@ class TestResponse:
     def status_code(self) -> int:
         return self._response.status_code
 
-    async def expect_status(self, status_code: int) -> 'TestResponse':
+    async def expect_status(self, status_code: int) -> 'AsyncTestResponse':
         assert self._response.status_code == status_code, \
             f"Expected status {status_code}, got {self._response.status_code}"
         return self
@@ -246,9 +246,9 @@ class TestResponse:
 @asynccontextmanager
 async def create_test_server(
         lifespan: Optional[Lifespan[AppType]] = None,
-) -> AsyncGenerator[TestServer, None]:
+) -> AsyncGenerator[AsyncTestServer, None]:
     """Create and manage a TestServer instance with proper lifecycle"""
-    server = TestServer(lifespan=lifespan)
+    server = AsyncTestServer(lifespan=lifespan)
     try:
         await server.start()
         yield server

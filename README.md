@@ -97,9 +97,9 @@ The diagram shows how the different components interact during:
 The `TestServer` class is the core component that manages the lifecycle of your test FastAPI application:
 
 ```python
-from fastapi_testing import TestServer
+from fastapi_testing import AsyncTestServer
 
-server = TestServer()
+server = AsyncTestServer()
 await server.start()
 # Use server.app to define routes
 # Use server.client to make requests

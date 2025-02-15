@@ -198,6 +198,7 @@ async def test_api(test_server: AsyncTestServer):
     for response in responses:
         await response.expect_status(200)
 ```
+> This is so cool because you can test your entire API with a single test function.
 
 ### Lifecycle Management
 

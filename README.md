@@ -239,7 +239,10 @@ async with create_test_server() as server:
     ])
 ```
 
-> As a final note, this framework is designed to be flexible and easy to use for testing FastAPI applications.
+💡Key take outs:
+> This framework is designed to be flexible and easy to use for testing FastAPI applications.
+> You can create custom test fixtures, test complex route configurations, and manage the server lifecycle with ease.
+> You can test your entire API with either selected endpoints or the complete router configuration.
 
 ### Configuration
 

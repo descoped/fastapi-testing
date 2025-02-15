@@ -239,6 +239,8 @@ async with create_test_server() as server:
     ])
 ```
 
+> As a final note, this framework is designed to be flexible and easy to use for testing FastAPI applications.
+
 ### Configuration
 
 You can customize the server behavior:

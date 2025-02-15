@@ -164,9 +164,6 @@ async def test_server(
             get_db_pool: lambda: transaction_manager.pool
         })
 
-        # Initialize test database with our pool
-        db._pool = transaction_manager.pool
-
         yield  # Server handles requests during this period
 
         # Cleanup after tests complete
@@ -175,6 +172,8 @@ async def test_server(
     async with create_test_server(lifespan=custom_lifespan) as server:
         yield server
 ```
+
+> This gives you enormous flexibility in setting up your test environment.
 
 ### Testing Routes and Routers
 

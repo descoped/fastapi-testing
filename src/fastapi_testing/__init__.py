@@ -1,4 +1,6 @@
 from fastapi_testing.async_fastapi_testing import (
+    Config,
+    global_config,
     InvalidResponseTypeError,
     PortGenerator,
     UvicornTestServer,
@@ -11,6 +13,8 @@ from fastapi_testing.async_fastapi_testing import (
 )
 
 __all__ = [
+    "Config",
+    "global_config",
     "InvalidResponseTypeError",
     "PortGenerator",
     "UvicornTestServer",

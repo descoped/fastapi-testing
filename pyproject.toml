@@ -3,15 +3,17 @@ name = "fastapi-testing"
 version = "0.2.1"
 description = "A lightweight, async-first testing framework for FastAPI applications"
 authors = ["Ove Ranheim <oranheim@gmail.com>"]
-readme = "docs/index.rst"
+readme = "README.md"
 packages = [{ include = "fastapi_testing", from = "src" }]
 license = "MIT"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Framework :: FastAPI",
     "Topic :: Software Development :: Testing",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -19,9 +21,7 @@ classifiers = [
 ]
 homepage = "https://github.com/descoped/fastapi-testing"
 repository = "https://github.com/descoped/fastapi-testing"
-documentation = "https://github.com/descoped/fastapi-testing/tree/master/docs"
 keywords = ["fastapi", "testing", "async", "pytest", "integration-testing", "test-framework"]
-
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -30,6 +30,8 @@ httpx = { extras = ["http2"], version = ">=0.23.0,<0.28.0" }
 uvicorn = "^0.34.0"
 starlette = "^0.45.0"
 pydantic = "^2.10.6"
+pydantic-settings = "^2.7.1"
+websockets = "^15.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

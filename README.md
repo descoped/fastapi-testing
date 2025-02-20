@@ -7,7 +7,7 @@ A lightweight, async-first testing framework designed specifically for FastAPI a
 - Async-first design for modern Python applications
 - Automatic port management for test servers
 - Clean lifecycle management with context managers
-- Built-in HTTP client with async support
+- Built-in HTTP and WebSocket client support
 - Proper cleanup of resources after tests
 - Support for FastAPI's lifespan events
 - Type-safe with full typing support
@@ -83,13 +83,6 @@ sequenceDiagram
     AsyncTestServer-->>-Test: cleanup complete
 ```
 
-The diagram shows how the different components interact during:
-1. Test server initialization
-2. Port allocation
-3. Server startup
-4. Test execution
-5. Cleanup and shutdown
-
 ## Key Components
 
 ### AsyncTestServer
@@ -142,6 +135,108 @@ data = await response.json()       # Get JSON response
 text = await response.text()       # Get text response
 ```
 
+### WebSocket Testing
+
+Test WebSocket endpoints with full protocol support:
+
+```python
+@pytest.mark.asyncio
+async def test_mixed_protocols(test_server):
+    # Define HTTP endpoint
+    @test_server.app.get("/api/data")
+    async def get_data():
+        return {"status": "ok"}
+
+    # Define WebSocket endpoint
+    @test_server.app.websocket("/ws/echo")
+    async def websocket_endpoint(websocket: WebSocket):
+        await websocket.accept(subprotocol="test-protocol")
+        while True:
+            try:
+                message = await websocket.receive()
+                if "text" in message:
+                    data = json.loads(message["text"])
+                    await websocket.send_json(data)
+                elif "bytes" in message:
+                    await websocket.send_bytes(message["bytes"])
+            except WebSocketDisconnect:
+                return
+
+    # Test HTTP endpoint
+    http_response = await test_server.client.get("/api/data")
+    assert http_response.status_code == 200
+
+    # Configure WebSocket
+    config = WebSocketConfig(
+        subprotocols=["test-protocol"],
+        ping_interval=20.0,
+        ping_timeout=20.0
+    )
+
+    # Test WebSocket endpoint
+    ws_response = await test_server.client.websocket("/ws/echo", config)
+    try:
+        # Test JSON messages
+        test_json = {"message": "test"}
+        await test_server.client.ws.send_json(ws_response, test_json)
+        response = await test_server.client.ws.receive_json(ws_response)
+        assert response == test_json
+
+        # Test binary messages
+        test_data = b"binary test"
+        await test_server.client.ws.send_binary(ws_response, test_data)
+        response = await test_server.client.ws.receive_binary(ws_response)
+        assert response == test_data
+    finally:
+        await ws_response.websocket().close()
+```
+
+#### WebSocket Message Operations
+
+The WebSocketHelper provides comprehensive message handling:
+
+```python
+# Send Operations
+await client.ws.send_text(ws_response, "message")
+await client.ws.send_json(ws_response, {"key": "value"})
+await client.ws.send_binary(ws_response, b"data")
+
+# Receive Operations
+text = await client.ws.receive_text(ws_response)
+json_data = await client.ws.receive_json(ws_response)
+binary = await client.ws.receive_binary(ws_response)
+
+# Message Expectations
+await client.ws.expect_message(
+    ws_response,
+    expected="message",
+    timeout=1.0
+)
+
+# Collect Multiple Messages
+messages = await client.ws.drain_messages(
+    ws_response,
+    timeout=1.0
+)
+```
+
+#### WebSocket Configuration
+
+Configure connections with various options:
+
+```python
+ws_config = WebSocketConfig(
+    subprotocols=["protocol"],  # Supported subprotocols
+    compression=None,           # Compression algorithm
+    extra_headers={},          # Additional headers
+    ping_interval=20.0,        # Keep-alive interval
+    ping_timeout=20.0,         # Ping timeout
+    max_size=2 ** 20,         # Max message size (1MB)
+    max_queue=32,             # Max queued messages
+    timeout=30.0              # Connection timeout
+)
+```
+
 ## Advanced Usage
 
 ### Advanced Server Configuration
@@ -173,8 +268,6 @@ async def test_server(
         yield server
 ```
 
-> This gives you enormous flexibility in setting up your test environment.
-
 ### Testing Routes and Routers
 
 You can test entire routers and complex route configurations:
@@ -198,7 +291,6 @@ async def test_api(test_server: AsyncTestServer):
     for response in responses:
         await response.expect_status(200)
 ```
-> This is so cool because you can test your entire API with a single test function.
 
 ### Lifecycle Management
 
@@ -239,14 +331,7 @@ async with create_test_server() as server:
     ])
 ```
 
-💡 Key takeouts:
-> This framework is designed to be flexible and easy to use for testing FastAPI applications.
-> 
-> You can create custom test fixtures, test complex route configurations, and manage the server lifecycle with ease.
-> 
-> You can test your entire API with either selected endpoints or the complete router configuration.
-
-### Configuration
+## Configuration
 
 You can customize the server behavior:
 

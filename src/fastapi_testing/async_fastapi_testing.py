@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Any, Set, AsyncGenerator, Dict, Union
@@ -9,7 +10,6 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.applications import AppType
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.types import Lifespan
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.protocol import State
@@ -25,32 +25,81 @@ DEFAULT_WS_RETRY_ATTEMPTS = 3
 DEFAULT_WS_RETRY_DELAY = 1.0
 
 
-class Config(BaseSettings):
+class Config:
     """
     Global configuration settings for fastapi-testing framework.
-
-    Environment variables:
-      - FASTAPI_TESTING_WS_MAX_MESSAGE_SIZE: Maximum size for websocket messages.
-      - FASTAPI_TESTING_WS_QUEUE_SIZE: Maximum websocket queue size.
-      - FASTAPI_TESTING_HTTP_MAX_KEEPALIVE: Maximum HTTP keepalive connections.
-      - FASTAPI_TESTING_HTTP_MAX_CONNECTIONS: Maximum HTTP connections.
-      - FASTAPI_TESTING_WS_RETRY_ATTEMPTS: Number of websocket retry attempts.
-      - FASTAPI_TESTING_WS_RETRY_DELAY: Delay (in seconds) between websocket retries.
-      - FASTAPI_TESTING_PORT_RANGE_START: Start port for testing servers.
-      - FASTAPI_TESTING_PORT_RANGE_END: End port for testing servers.
     """
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="FASTAPI_TESTING_")
-    WS_MAX_MESSAGE_SIZE: int = DEFAULT_WS_MESSAGE_SIZE
-    WS_MAX_QUEUE_SIZE: int = DEFAULT_WS_QUEUE_SIZE
-    HTTP_MAX_KEEPALIVE: int = DEFAULT_KEEPALIVE_CONNS
-    HTTP_MAX_CONNECTIONS: int = DEFAULT_MAX_CONNS
-    WS_RETRY_ATTEMPTS: int = DEFAULT_WS_RETRY_ATTEMPTS
-    WS_RETRY_DELAY: float = DEFAULT_WS_RETRY_DELAY
-    PORT_RANGE_START: int = 8001
-    PORT_RANGE_END: int = 9000
+
+    def __init__(
+            self,
+            ws_max_message_size: int = DEFAULT_WS_MESSAGE_SIZE,
+            ws_max_queue_size: int = DEFAULT_WS_QUEUE_SIZE,
+            http_max_keepalive: int = DEFAULT_KEEPALIVE_CONNS,
+            http_max_connections: int = DEFAULT_MAX_CONNS,
+            ws_retry_attempts: int = DEFAULT_WS_RETRY_ATTEMPTS,
+            ws_retry_delay: float = DEFAULT_WS_RETRY_DELAY,
+            port_range_start: int = 8001,
+            port_range_end: int = 9000,
+    ):
+        self.WS_MAX_MESSAGE_SIZE = ws_max_message_size
+        self.WS_MAX_QUEUE_SIZE = ws_max_queue_size
+        self.HTTP_MAX_KEEPALIVE = http_max_keepalive
+        self.HTTP_MAX_CONNECTIONS = http_max_connections
+        self.WS_RETRY_ATTEMPTS = ws_retry_attempts
+        self.WS_RETRY_DELAY = ws_retry_delay
+        self.PORT_RANGE_START = port_range_start
+        self.PORT_RANGE_END = port_range_end
+
+    @classmethod
+    def from_env(cls, prefix: str = "FASTAPI_TESTING_"):
+        """
+        Create configuration from environment variables.
+        This is an explicit opt-in method.
+        """
+        # Only look for variables with the specified prefix
+        env_vars = {k: v for k, v in os.environ.items() if k.startswith(prefix)}
+
+        # Convert to expected parameter names
+        config_params = {}
+        for env_key, env_value in env_vars.items():
+            config_key = env_key[len(prefix):].lower()
+            # Handle type conversion
+            if config_key in [
+                "ws_max_message_size",
+                "ws_max_queue_size",
+                "http_max_keepalive",
+                "http_max_connections",
+                "ws_retry_attempts",
+                "port_range_start",
+                "port_range_end"
+            ]:
+                try:
+                    config_params[config_key] = int(env_value)
+                except ValueError:
+                    pass  # Silently ignore invalid values
+            elif config_key == "ws_retry_delay":
+                try:
+                    config_params[config_key] = float(env_value)
+                except ValueError:
+                    pass
+
+        return cls(**config_params)
+
+    @classmethod
+    def from_file(cls, file_path: str):
+        """Load configuration from a file."""
+        # Implementation for loading from a file (JSON, YAML, etc.)
+        pass
 
 
+# Create the global configuration with defaults
 global_config = Config()
+
+
+# Users can override it with their own configuration:
+# global_config = Config.from_env()
+# or
+# global_config = Config(ws_max_message_size=2**21, http_max_connections=200)
 
 
 class InvalidResponseTypeError(Exception):

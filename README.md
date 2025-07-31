@@ -15,6 +15,11 @@ A lightweight, async-first testing framework designed specifically for FastAPI a
 ## Installation
 
 ```bash
+uv add fastapi-testing
+```
+
+Or with pip:
+```bash
 pip install fastapi-testing
 ```
 

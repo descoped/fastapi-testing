@@ -1,0 +1,71 @@
+name: Build and Test (Native)
+
+on:
+  push:
+    branches:
+      - master
+    tags-ignore:
+      - '**'
+    paths-ignore:
+      - '**.md'
+
+env:
+  PYTHON_VERSION: '3.13'
+  UV_VERSION: '0.5.11'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: ${{ env.UV_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        uv sync --all-groups
+    
+    - name: Run tests with coverage
+      env:
+        FASTAPI_TESTING_PORT_RANGE_START: 8001
+        FASTAPI_TESTING_PORT_RANGE_END: 9000
+      run: |
+        uv run pytest -v --tb=short --cov=src/authly --cov-report=xml --cov-report=term
+    
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: descoped/authly
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: ${{ env.UV_VERSION }}
+    
+    - name: Build package
+      run: |
+        uv build

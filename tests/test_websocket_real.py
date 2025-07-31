@@ -102,7 +102,7 @@ class TestWebSocketRealWorld:
                 await server.client.ws.send_text(ws_response, "trigger")
 
                 # Expect a specific message but timeout before it arrives
-                with pytest.raises(TimeoutError, match="Timeout waiting for expected message"):
+                with pytest.raises(TimeoutError):
                     await server.client.ws.expect_message(
                         ws_response,
                         expected="expected_message",

@@ -46,7 +46,7 @@ jobs:
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: descoped/fastapi_testing
+        slug: descoped/fastapi-testing
 
   build:
     runs-on: ubuntu-latest

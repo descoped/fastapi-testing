@@ -1,5 +1,11 @@
 # FastAPI Testing
 
+[![Build Status](https://github.com/descoped/fastapi-testing/actions/workflows/build-test.yml/badge.svg)](https://github.com/descoped/fastapi-testing/actions/workflows/build-test-native.yml)
+[![Coverage](https://codecov.io/gh/descoped/fastapi-testing/branch/master/graph/badge.svg)](https://codecov.io/gh/descoped/fastapi-testing)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/github/v/release/descoped/fastapi-testing)](https://github.com/descoped/fastapi-testing/releases)
+
 A lightweight, async-first testing framework designed specifically for FastAPI applications. This library provides a simple way to write integration tests for FastAPI applications with proper lifecycle management and async support.
 
 ## Features

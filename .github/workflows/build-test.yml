@@ -40,13 +40,13 @@ jobs:
         FASTAPI_TESTING_PORT_RANGE_START: 8001
         FASTAPI_TESTING_PORT_RANGE_END: 9000
       run: |
-        uv run pytest -v --tb=short --cov=src/authly --cov-report=xml --cov-report=term
+        uv run pytest -v --tb=short --cov=src/fastapi_testing --cov-report=xml --cov-report=term
     
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: descoped/authly
+        slug: descoped/fastapi_testing
 
   build:
     runs-on: ubuntu-latest

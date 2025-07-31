@@ -361,6 +361,38 @@ server = AsyncTestServer(
 4. Handle exceptions appropriately in your tests
 5. Use type hints to catch potential issues early
 
+## Testing
+
+The framework itself is thoroughly tested with >88% code coverage, ensuring reliability for production use.
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage report
+uv run pytest --cov=src/fastapi_testing --cov-report=term-missing
+
+# Run specific test categories
+uv run pytest tests/test_server.py          # Server functionality
+uv run pytest tests/test_websockets.py     # WebSocket support
+uv run pytest tests/test_config.py         # Configuration tests
+```
+
+### Test Structure
+
+The test suite includes:
+
+- **Integration tests** - Real FastAPI applications with actual network connections
+- **Configuration tests** - Environment variable loading and validation
+- **Error handling tests** - Edge cases and failure scenarios
+- **WebSocket tests** - Real-time bidirectional communication
+- **Lifecycle tests** - Server startup, shutdown, and resource management
+- **Concurrent request tests** - Multiple simultaneous connections
+
+All tests follow modern async/await patterns and avoid mocks to ensure real-world reliability.
+
 ## Error Handling
 
 The framework provides clear error messages for common issues:

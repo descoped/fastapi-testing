@@ -1,6 +1,6 @@
 [project]
 name = "fastapi-testing"
-version = "0.3.0"
+version = "0.3.1"
 description = "A lightweight, async-first testing framework for FastAPI applications"
 authors = [
     { name = "Ove Ranheim", email = "oranheim@gmail.com" }

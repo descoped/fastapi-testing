@@ -37,6 +37,7 @@ dev = [
     "pytest-asyncio>=0.25.2",
     "pytest-cov>=6.0.0",
     "pydantic>=2.10.6",
+    "ruff>=0.8.0",
     "restructuredtext-lint>=1.4.0",
     "pygments>=2.19.1",
 ]
@@ -86,3 +87,59 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "asyncio: mark test as async",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+indent-width = 4
+respect-gitignore = true
+extend-exclude = [
+    "__pycache__",
+    ".pytest_cache",
+    "build",
+    "dist",
+    ".venv",
+    ".env",
+    "htmlcov",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "T20", # flake8-print
+    "SIM", # flake8-simplify
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "E741",   # Ambiguous variable name
+    "B008",   # Do not perform function calls in argument defaults
+    "B017",   # Assert raises on Exception - sometimes needed for testing
+    "T201",   # Print found (allow print statements)
+    "RUF012", # Mutable class attributes should be annotated with `typing.ClassVar`
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fastapi_testing"]
+force-single-line = false
+combine-as-imports = true
+split-on-trailing-comma = true
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"

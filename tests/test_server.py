@@ -1,14 +1,14 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional, List, Dict, Annotated
+from typing import Annotated
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
-from pydantic import BaseModel, Field, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from fastapi_testing import create_test_server
 
@@ -30,16 +30,17 @@ class Tag(BaseModel):
 
 class ItemModel(BaseModel):
     """Test model with various field types"""
+
     model_config = ConfigDict(frozen=True, validate_assignment=False)
 
     id: UUID = Field(default_factory=uuid4)
     name: str
     price: float
-    description: Optional[str] = None
+    description: str | None = None
     status: ItemStatus = ItemStatus.DRAFT
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    tags: Annotated[List[Tag], Field(default_factory=list)]
-    metadata: Annotated[Dict[str, str], Field(default_factory=dict)]
+    tags: Annotated[list[Tag], Field(default_factory=list)]
+    metadata: Annotated[dict[str, str], Field(default_factory=dict)]
 
     @computed_field
     def is_active(self) -> bool:
@@ -64,6 +65,7 @@ async def test_basic_endpoint():
         logger.info("Shutting down test server")
 
     async with create_test_server(lifespan=lifespan) as server:
+
         @server.app.get("/test")
         async def test_endpoint():
             return {"message": "success"}
@@ -78,6 +80,7 @@ async def test_basic_endpoint():
 async def test_create_item():
     """Test POST endpoint with JSON payload"""
     async with create_test_server() as server:
+
         @server.app.post("/items", status_code=201, response_model=ItemModel)
         async def create_item(item: ItemModel):
             return item
@@ -86,7 +89,7 @@ async def test_create_item():
             "name": "Test Item",
             "price": 10.99,
             "description": "A test item",
-            "tags": [{"name": "test", "color": "#ff0000"}]
+            "tags": [{"name": "test", "color": "#ff0000"}],
         }
 
         response = await server.client.post("/items", json=test_item)
@@ -100,15 +103,11 @@ async def test_create_item():
 async def test_get_items():
     """Test GET endpoint returning a list"""
     async with create_test_server() as server:
-        @server.app.get("/items", response_model=List[ItemModel])
+
+        @server.app.get("/items", response_model=list[ItemModel])
         async def get_items():
             items = [
-                ItemModel(
-                    name=f"Item {i}",
-                    price=10.99 * i,
-                    tags=[Tag(name="test", color="#ff0000")]
-                )
-                for i in range(3)
+                ItemModel(name=f"Item {i}", price=10.99 * i, tags=[Tag(name="test", color="#ff0000")]) for i in range(3)
             ]
             return items
 
@@ -131,11 +130,7 @@ async def test_update_item():
             return item
 
         item_id = uuid4()
-        test_item = {
-            "name": "Updated Item",
-            "price": 20.99,
-            "description": "An updated item"
-        }
+        test_item = {"name": "Updated Item", "price": 20.99, "description": "An updated item"}
 
         response = await server.client.put(f"/items/{item_id}", json=test_item)
         await response.expect_status(200)
@@ -148,6 +143,7 @@ async def test_update_item():
 async def test_delete_item():
     """Test DELETE endpoint"""
     async with create_test_server() as server:
+
         @server.app.delete("/items/{item_id}", status_code=204)
         async def delete_item(item_id: UUID):
             return None
@@ -161,6 +157,7 @@ async def test_delete_item():
 async def test_error_handling():
     """Test error responses"""
     async with create_test_server() as server:
+
         @server.app.get("/error")
         async def error_endpoint():
             raise ValueError("Test error")
@@ -173,15 +170,13 @@ async def test_error_handling():
 async def test_multiple_requests():
     """Test multiple concurrent requests"""
     async with create_test_server() as server:
+
         @server.app.get("/ping")
         async def ping():
             return {"status": "ok"}
 
         # Make multiple concurrent requests
-        responses = await asyncio.gather(*[
-            server.client.get("/ping")
-            for _ in range(5)
-        ])
+        responses = await asyncio.gather(*[server.client.get("/ping") for _ in range(5)])
 
         for response in responses:
             await response.expect_status(200)

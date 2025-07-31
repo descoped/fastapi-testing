@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import pytest
 from fastapi import FastAPI, HTTPException
 
-from fastapi_testing import create_test_server, AsyncTestServer
+from fastapi_testing import AsyncTestServer, create_test_server
 
 
 class TestServerLifecycle:
@@ -26,6 +26,7 @@ class TestServerLifecycle:
             shutdown_called = True
 
         async with create_test_server(lifespan=custom_lifespan) as server:
+
             @server.app.get("/test")
             async def test_endpoint():
                 return {"status": "ok"}
@@ -38,11 +39,11 @@ class TestServerLifecycle:
         # After context exit, shutdown should be called
         assert shutdown_called is True
 
-
     @pytest.mark.asyncio
     async def test_server_with_exception_handling(self):
         """Test server error handling for various HTTP errors"""
         async with create_test_server() as server:
+
             @server.app.get("/error/{status_code}")
             async def error_endpoint(status_code: int):
                 if status_code == 404:
@@ -72,6 +73,7 @@ class TestServerLifecycle:
     async def test_server_concurrent_requests_with_delays(self):
         """Test server handling concurrent requests with artificial delays"""
         async with create_test_server() as server:
+
             @server.app.get("/slow/{delay}")
             async def slow_endpoint(delay: float):
                 await asyncio.sleep(delay)
@@ -82,7 +84,7 @@ class TestServerLifecycle:
                 server.client.get("/slow/0.1"),
                 server.client.get("/slow/0.05"),
                 server.client.get("/slow/0.15"),
-                server.client.get("/slow/0.02")
+                server.client.get("/slow/0.02"),
             ]
 
             responses = await asyncio.gather(*tasks)
@@ -100,7 +102,7 @@ class TestServerLifecycle:
         server = AsyncTestServer()
 
         # Server should not be running initially
-        assert not hasattr(server, '_server_task') or server._server_task is None
+        assert not hasattr(server, "_server_task") or server._server_task is None
 
         try:
             await server.start()
@@ -139,6 +141,7 @@ class TestServerLifecycle:
                 def make_endpoint(server_id):
                     async def test_endpoint():
                         return {"server": server_id}
+
                     return test_endpoint
 
                 server.app.get(f"/server-{i}")(make_endpoint(i))
@@ -161,7 +164,7 @@ class TestServerLifecycle:
         """Test server with custom middleware"""
         # Create server with middleware configured before startup
         server = AsyncTestServer()
-        
+
         # Add custom middleware before starting server
         @server.app.middleware("http")
         async def custom_middleware(request, call_next):
@@ -176,7 +179,7 @@ class TestServerLifecycle:
 
         try:
             await server.start()
-            
+
             response = await server.client.get("/middleware-test")
             await response.expect_status(200)
 
@@ -215,6 +218,7 @@ class TestServerLifecycle:
     async def test_invalid_client_requests(self):
         """Test client behavior with invalid requests"""
         async with create_test_server() as server:
+
             @server.app.get("/valid")
             async def valid_endpoint():
                 return {"valid": True}
@@ -225,9 +229,7 @@ class TestServerLifecycle:
 
             # Test malformed JSON in POST request
             response = await server.client.post(
-                "/valid",
-                headers={"Content-Type": "application/json"},
-                content="invalid-json"
+                "/valid", headers={"Content-Type": "application/json"}, content="invalid-json"
             )
             # Server should handle malformed JSON gracefully
             assert response.status_code in [400, 405, 422]  # Bad request, method not allowed, or validation error

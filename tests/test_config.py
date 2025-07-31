@@ -11,7 +11,7 @@ class TestConfig:
     def test_config_defaults(self):
         """Test that Config initializes with correct defaults"""
         config = Config()
-        assert config.WS_MAX_MESSAGE_SIZE == 2 ** 20  # 1MB
+        assert config.WS_MAX_MESSAGE_SIZE == 2**20  # 1MB
         assert config.WS_MAX_QUEUE_SIZE == 32
         assert config.HTTP_MAX_KEEPALIVE == 20
         assert config.HTTP_MAX_CONNECTIONS == 100
@@ -30,7 +30,7 @@ class TestConfig:
             ws_retry_attempts=5,
             ws_retry_delay=2.0,
             port_range_start=8080,
-            port_range_end=8090
+            port_range_end=8090,
         )
         assert config.WS_MAX_MESSAGE_SIZE == 1024
         assert config.WS_MAX_QUEUE_SIZE == 16
@@ -52,7 +52,7 @@ class TestConfig:
             "FASTAPI_TESTING_WS_RETRY_ATTEMPTS": "5",
             "FASTAPI_TESTING_WS_RETRY_DELAY": "2.5",
             "FASTAPI_TESTING_PORT_RANGE_START": "9001",
-            "FASTAPI_TESTING_PORT_RANGE_END": "9100"
+            "FASTAPI_TESTING_PORT_RANGE_END": "9100",
         }
 
         # Store original env vars
@@ -85,7 +85,7 @@ class TestConfig:
         env_vars = {
             "FASTAPI_TESTING_WS_MAX_MESSAGE_SIZE": "invalid_int",
             "FASTAPI_TESTING_WS_RETRY_DELAY": "not_a_float",
-            "FASTAPI_TESTING_PORT_RANGE_START": "abc"
+            "FASTAPI_TESTING_PORT_RANGE_START": "abc",
         }
 
         # Store original env vars
@@ -97,7 +97,7 @@ class TestConfig:
         try:
             config = Config.from_env()
             # Should use defaults when invalid values are provided
-            assert config.WS_MAX_MESSAGE_SIZE == 2 ** 20  # Default
+            assert config.WS_MAX_MESSAGE_SIZE == 2**20  # Default
             assert config.WS_RETRY_DELAY == 1.0  # Default
             assert config.PORT_RANGE_START == 8001  # Default
         finally:
@@ -130,7 +130,7 @@ class TestConfig:
         try:
             config = Config.from_env()
             # Should use all defaults
-            assert config.WS_MAX_MESSAGE_SIZE == 2 ** 20
+            assert config.WS_MAX_MESSAGE_SIZE == 2**20
             assert config.WS_MAX_QUEUE_SIZE == 32
             assert config.WS_RETRY_DELAY == 1.0
         finally:

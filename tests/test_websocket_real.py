@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from fastapi import WebSocket, WebSocketDisconnect
 
-from fastapi_testing import create_test_server, WebSocketConfig
+from fastapi_testing import WebSocketConfig, create_test_server
 
 
 class TestWebSocketRealWorld:
@@ -13,6 +13,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_type_errors_real(self):
         """Test WebSocket helper methods with actual mismatched data types"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(websocket: WebSocket):
                 await websocket.accept()
@@ -37,6 +38,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_receive_text_from_binary(self):
         """Test receiving text when binary data is sent"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(websocket: WebSocket):
                 await websocket.accept()
@@ -60,6 +62,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_receive_binary_from_text(self):
         """Test receiving binary when text data is sent"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(websocket: WebSocket):
                 await websocket.accept()
@@ -83,6 +86,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_expect_message_timeout(self):
         """Test expect_message with real timeout scenario"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(websocket: WebSocket):
                 await websocket.accept()
@@ -103,11 +107,7 @@ class TestWebSocketRealWorld:
 
                 # Expect a specific message but timeout before it arrives
                 with pytest.raises(TimeoutError):
-                    await server.client.ws.expect_message(
-                        ws_response,
-                        expected="expected_message",
-                        timeout=0.1
-                    )
+                    await server.client.ws.expect_message(ws_response, expected="expected_message", timeout=0.1)
             finally:
                 await ws_response.websocket().close()
 
@@ -115,6 +115,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_drain_messages_timeout(self):
         """Test drain_messages with timeout"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(websocket: WebSocket):
                 await websocket.accept()
@@ -132,10 +133,7 @@ class TestWebSocketRealWorld:
 
             try:
                 # Drain messages with short timeout
-                messages = await server.client.ws.drain_messages(
-                    ws_response,
-                    timeout=0.1
-                )
+                messages = await server.client.ws.drain_messages(ws_response, timeout=0.1)
 
                 # Should get the first two messages before timeout
                 assert len(messages) == 2
@@ -148,6 +146,7 @@ class TestWebSocketRealWorld:
     async def test_websocket_config_with_custom_settings(self):
         """Test WebSocket connection with custom configuration"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws")
             async def ws_endpoint(ws: WebSocket):
                 await ws.accept(subprotocol="test-protocol")
@@ -164,7 +163,7 @@ class TestWebSocketRealWorld:
                 ping_timeout=10.0,
                 timeout=5.0,
                 max_size=1024 * 1024,  # 1MB
-                max_queue=16
+                max_queue=16,
             )
 
             ws_response = await server.client.websocket("/ws", config=config)
@@ -189,13 +188,14 @@ class TestWebSocketRealWorld:
             # Don't define any WebSocket endpoint
 
             # This should fail to connect
-            with pytest.raises(Exception):  # Connection will fail
+            with pytest.raises(Exception):  # WebSocket connection will fail
                 await server.client.websocket("/nonexistent")
 
     @pytest.mark.asyncio
     async def test_multiple_websocket_connections(self):
         """Test handling multiple WebSocket connections simultaneously"""
         async with create_test_server() as server:
+
             @server.app.websocket("/ws/{client_id}")
             async def ws_endpoint(websocket: WebSocket, client_id: str):
                 await websocket.accept()
@@ -213,8 +213,7 @@ class TestWebSocketRealWorld:
             try:
                 # Send messages concurrently
                 await asyncio.gather(
-                    server.client.ws.send_text(ws1, "hello1"),
-                    server.client.ws.send_text(ws2, "hello2")
+                    server.client.ws.send_text(ws1, "hello1"), server.client.ws.send_text(ws2, "hello2")
                 )
 
                 # Receive responses

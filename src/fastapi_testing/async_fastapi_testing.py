@@ -2,9 +2,10 @@ import asyncio
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from typing import List, Optional, Any, Set, AsyncGenerator, Dict, Union
+from typing import Any
 
 import httpx
 import uvicorn
@@ -17,7 +18,7 @@ from websockets.protocol import State
 logger = logging.getLogger(__name__)
 
 # Configuration Constants
-DEFAULT_WS_MESSAGE_SIZE = 2 ** 20  # 1MB
+DEFAULT_WS_MESSAGE_SIZE = 2**20  # 1MB
 DEFAULT_WS_QUEUE_SIZE = 32
 DEFAULT_KEEPALIVE_CONNS = 20
 DEFAULT_MAX_CONNS = 100
@@ -31,15 +32,15 @@ class Config:
     """
 
     def __init__(
-            self,
-            ws_max_message_size: int = DEFAULT_WS_MESSAGE_SIZE,
-            ws_max_queue_size: int = DEFAULT_WS_QUEUE_SIZE,
-            http_max_keepalive: int = DEFAULT_KEEPALIVE_CONNS,
-            http_max_connections: int = DEFAULT_MAX_CONNS,
-            ws_retry_attempts: int = DEFAULT_WS_RETRY_ATTEMPTS,
-            ws_retry_delay: float = DEFAULT_WS_RETRY_DELAY,
-            port_range_start: int = 8001,
-            port_range_end: int = 9000,
+        self,
+        ws_max_message_size: int = DEFAULT_WS_MESSAGE_SIZE,
+        ws_max_queue_size: int = DEFAULT_WS_QUEUE_SIZE,
+        http_max_keepalive: int = DEFAULT_KEEPALIVE_CONNS,
+        http_max_connections: int = DEFAULT_MAX_CONNS,
+        ws_retry_attempts: int = DEFAULT_WS_RETRY_ATTEMPTS,
+        ws_retry_delay: float = DEFAULT_WS_RETRY_DELAY,
+        port_range_start: int = 8001,
+        port_range_end: int = 9000,
     ):
         self.WS_MAX_MESSAGE_SIZE = ws_max_message_size
         self.WS_MAX_QUEUE_SIZE = ws_max_queue_size
@@ -62,7 +63,7 @@ class Config:
         # Convert to expected parameter names
         config_params = {}
         for env_key, env_value in env_vars.items():
-            config_key = env_key[len(prefix):].lower()
+            config_key = env_key[len(prefix) :].lower()
             # Handle type conversion
             if config_key in [
                 "ws_max_message_size",
@@ -71,17 +72,13 @@ class Config:
                 "http_max_connections",
                 "ws_retry_attempts",
                 "port_range_start",
-                "port_range_end"
+                "port_range_end",
             ]:
-                try:
+                with suppress(ValueError):
                     config_params[config_key] = int(env_value)
-                except ValueError:
-                    pass  # Silently ignore invalid values
             elif config_key == "ws_retry_delay":
-                try:
+                with suppress(ValueError):
                     config_params[config_key] = float(env_value)
-                except ValueError:
-                    pass
 
         return cls(**config_params)
 
@@ -104,6 +101,7 @@ global_config = Config()
 
 class InvalidResponseTypeError(Exception):
     """Exception raised when an operation is not supported for the response type."""
+
     pass
 
 
@@ -121,38 +119,39 @@ class WebSocketConfig:
         max_queue: Maximum number of queued messages
         timeout: Connection timeout in seconds
     """
-    subprotocols: Optional[List[str]] = None
-    compression: Optional[str] = None
-    extra_headers: Optional[Dict[str, str]] = None
-    ping_interval: Optional[float] = None
-    ping_timeout: Optional[float] = None
+
+    subprotocols: list[str] | None = None
+    compression: str | None = None
+    extra_headers: dict[str, str] | None = None
+    ping_interval: float | None = None
+    ping_timeout: float | None = None
     max_size: int = global_config.WS_MAX_MESSAGE_SIZE
     max_queue: int = global_config.WS_MAX_QUEUE_SIZE
-    timeout: Optional[float] = None
+    timeout: float | None = None
 
 
 class PortGenerator:
-    """Manages port allocation for test servers using configuration from global settings.
-    """
+    """Manages port allocation for test servers using configuration from global settings."""
 
-    def __init__(self, start: Optional[int] = None, end: Optional[int] = None):
+    def __init__(self, start: int | None = None, end: int | None = None):
         if start is None:
             start = global_config.PORT_RANGE_START
         if end is None:
             end = global_config.PORT_RANGE_END
         self.start = start
         self.end = end
-        self.used_ports: Set[int] = set()
+        self.used_ports: set[int] = set()
 
     @staticmethod
     def is_port_available(port: int) -> bool:
-        from contextlib import closing
         import socket
+        from contextlib import closing
+
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
             try:
-                sock.bind(('localhost', port))
+                sock.bind(("localhost", port))
                 return True
-            except (socket.error, OverflowError):
+            except (OSError, OverflowError):
                 return False
 
     def get_port(self) -> int:
@@ -162,6 +161,7 @@ class PortGenerator:
             raise RuntimeError(f"No available ports in range {self.start}-{self.end}")
 
         import random
+
         while available_ports:
             port = random.choice(list(available_ports))
             if self.is_port_available(port):
@@ -182,7 +182,7 @@ class AsyncTestResponse:
     with proper type checking and error handling.
     """
 
-    def __init__(self, response: Union[httpx.Response, ClientConnection]):
+    def __init__(self, response: httpx.Response | ClientConnection):
         self._response = response
         self._is_websocket = isinstance(response, ClientConnection)
 
@@ -190,14 +190,16 @@ class AsyncTestResponse:
         """Get JSON response (HTTP only)."""
         if self._is_websocket:
             raise InvalidResponseTypeError(
-                "Cannot get JSON directly from WebSocket response. Use websocket() methods instead.")
+                "Cannot get JSON directly from WebSocket response. Use websocket() methods instead."
+            )
         return await asyncio.to_thread(self._response.json)
 
     async def text(self) -> str:
         """Get text response (HTTP only)."""
         if self._is_websocket:
             raise InvalidResponseTypeError(
-                "Cannot get text directly from WebSocket response. Use websocket() methods instead.")
+                "Cannot get text directly from WebSocket response. Use websocket() methods instead."
+            )
         return await asyncio.to_thread(lambda: self._response.text)
 
     @property
@@ -213,12 +215,13 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError("This response is not a WebSocket connection")
         return self._response
 
-    async def expect_status(self, status_code: int) -> 'AsyncTestResponse':
+    async def expect_status(self, status_code: int) -> "AsyncTestResponse":
         """Assert expected status code (HTTP only)."""
         if self._is_websocket:
             raise InvalidResponseTypeError("WebSocket connections don't have status codes")
-        assert self._response.status_code == status_code, \
+        assert self._response.status_code == status_code, (
             f"Expected status {status_code}, got {self._response.status_code}"
+        )
         return self
 
 
@@ -272,15 +275,13 @@ class WebSocketHelper:
 
     @staticmethod
     async def expect_message(
-            resp: AsyncTestResponse,
-            expected: Union[str, dict, bytes],
-            timeout: Optional[float] = None
+        resp: AsyncTestResponse, expected: str | dict | bytes, timeout: float | None = None
     ) -> None:
         """Assert expected message is received within timeout."""
         ws = resp.websocket()
         try:
             message = await asyncio.wait_for(ws.recv(), timeout)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             logger.error("Timed out waiting for message")
             raise e
 
@@ -294,10 +295,7 @@ class WebSocketHelper:
                 raise AssertionError(f"Expected message {expected}, got {message}")
 
     @staticmethod
-    async def drain_messages(
-            resp: AsyncTestResponse,
-            timeout: Optional[float] = 0.1
-    ) -> List[Any]:
+    async def drain_messages(resp: AsyncTestResponse, timeout: float | None = 0.1) -> list[Any]:
         """Drain all pending messages from websocket queue."""
         ws = resp.websocket()
         messages = []
@@ -305,7 +303,7 @@ class WebSocketHelper:
             while True:
                 message = await asyncio.wait_for(ws.recv(), timeout)
                 messages.append(message)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         return messages
 
@@ -313,26 +311,17 @@ class WebSocketHelper:
 class AsyncTestClient:
     """Async test client supporting both HTTP and WebSocket connections."""
 
-    def __init__(
-            self,
-            base_url: str,
-            timeout: float = 30.0,
-            follow_redirects: bool = True
-    ):
-        self._base_url = base_url.rstrip('/')
+    def __init__(self, base_url: str, timeout: float = 30.0, follow_redirects: bool = True):
+        self._base_url = base_url.rstrip("/")
         self._timeout = timeout
-        self._websocket_connections: Set[ClientConnection] = set()
+        self._websocket_connections: set[ClientConnection] = set()
 
         limits = httpx.Limits(
             max_keepalive_connections=global_config.HTTP_MAX_KEEPALIVE,
-            max_connections=global_config.HTTP_MAX_CONNECTIONS
+            max_connections=global_config.HTTP_MAX_CONNECTIONS,
         )
         self._client = httpx.AsyncClient(
-            base_url=self._base_url,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-            limits=limits,
-            http2=True
+            base_url=self._base_url, timeout=timeout, follow_redirects=follow_redirects, limits=limits, http2=True
         )
 
         self.ws = WebSocketHelper()
@@ -354,21 +343,13 @@ class AsyncTestClient:
         if self._client:
             await self._client.aclose()
 
-    async def request(
-            self,
-            method: str,
-            url: str,
-            **kwargs: Any
-    ) -> AsyncTestResponse:
+    async def request(self, method: str, url: str, **kwargs: Any) -> AsyncTestResponse:
         """Make HTTP request."""
         response = await self._client.request(method, url, **kwargs)
         return AsyncTestResponse(response)
 
     async def websocket(
-            self,
-            path: str,
-            config: Optional[WebSocketConfig] = None,
-            options: Optional[Dict[str, Any]] = None
+        self, path: str, config: WebSocketConfig | None = None, options: dict[str, Any] | None = None
     ) -> AsyncTestResponse:
         """Create a websocket connection with configuration."""
         if not (self._base_url.startswith("http://") or self._base_url.startswith("https://")):
@@ -380,25 +361,25 @@ class AsyncTestClient:
         else:
             ws_url = f"ws://{self._base_url}{path}"
 
-        connect_kwargs: Dict[str, Any] = {
-            'open_timeout': self._timeout,
-            'max_size': global_config.WS_MAX_MESSAGE_SIZE,
-            'max_queue': global_config.WS_MAX_QUEUE_SIZE
+        connect_kwargs: dict[str, Any] = {
+            "open_timeout": self._timeout,
+            "max_size": global_config.WS_MAX_MESSAGE_SIZE,
+            "max_queue": global_config.WS_MAX_QUEUE_SIZE,
         }
 
         if config:
             if config.subprotocols:
-                connect_kwargs['subprotocols'] = config.subprotocols
+                connect_kwargs["subprotocols"] = config.subprotocols
             if config.compression:
-                connect_kwargs['compression'] = config.compression
+                connect_kwargs["compression"] = config.compression
             if config.extra_headers:
-                connect_kwargs['additional_headers'] = config.extra_headers
+                connect_kwargs["additional_headers"] = config.extra_headers
             if config.ping_interval:
-                connect_kwargs['ping_interval'] = config.ping_interval
+                connect_kwargs["ping_interval"] = config.ping_interval
             if config.ping_timeout:
-                connect_kwargs['ping_timeout'] = config.ping_timeout
+                connect_kwargs["ping_timeout"] = config.ping_timeout
             if config.timeout:
-                connect_kwargs['open_timeout'] = config.timeout
+                connect_kwargs["open_timeout"] = config.timeout
 
         if options:
             connect_kwargs.update(options)
@@ -423,19 +404,19 @@ class AsyncTestClient:
         return AsyncTestResponse(ws)
 
     async def get(self, url: str, **kwargs: Any) -> AsyncTestResponse:
-        return await self.request('GET', url, **kwargs)
+        return await self.request("GET", url, **kwargs)
 
     async def post(self, url: str, **kwargs: Any) -> AsyncTestResponse:
-        return await self.request('POST', url, **kwargs)
+        return await self.request("POST", url, **kwargs)
 
     async def put(self, url: str, **kwargs: Any) -> AsyncTestResponse:
-        return await self.request('PUT', url, **kwargs)
+        return await self.request("PUT", url, **kwargs)
 
     async def delete(self, url: str, **kwargs: Any) -> AsyncTestResponse:
-        return await self.request('DELETE', url, **kwargs)
+        return await self.request("DELETE", url, **kwargs)
 
     async def patch(self, url: str, **kwargs: Any) -> AsyncTestResponse:
-        return await self.request('PATCH', url, **kwargs)
+        return await self.request("PATCH", url, **kwargs)
 
     async def __aenter__(self) -> "AsyncTestClient":
         return self
@@ -451,7 +432,7 @@ class UvicornTestServer(uvicorn.Server):
         super().__init__(config)
         self.startup_handler = startup_handler
 
-    async def startup(self, sockets: Optional[List] = None) -> None:
+    async def startup(self, sockets: list | None = None) -> None:
         """Override startup to signal when ready."""
         await super().startup(sockets=sockets)
         self.startup_handler.set()
@@ -465,22 +446,22 @@ class AsyncTestServer:
     """Async test server with proper lifecycle management and WebSocket support."""
 
     def __init__(
-            self,
-            lifespan: Optional[Lifespan[AppType]] = None,
-            startup_timeout: float = 30.0,
-            shutdown_timeout: float = 10.0,
+        self,
+        lifespan: Lifespan[AppType] | None = None,
+        startup_timeout: float = 30.0,
+        shutdown_timeout: float = 10.0,
     ):
         self.app = FastAPI(lifespan=lifespan)
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
         self._startup_complete = asyncio.Event()
         self._shutdown_complete = asyncio.Event()
-        self._server_task: Optional[asyncio.Task] = None
-        self._port: Optional[int] = None
+        self._server_task: asyncio.Task | None = None
+        self._port: int | None = None
         self._host = "127.0.0.1"
-        self._client: Optional[AsyncTestClient] = None
-        self._server: Optional[UvicornTestServer] = None
-        self._websocket_tasks: Set[asyncio.Task] = set()
+        self._client: AsyncTestClient | None = None
+        self._server: UvicornTestServer | None = None
+        self._websocket_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         """Start the server asynchronously with proper lifecycle management."""
@@ -490,13 +471,7 @@ class AsyncTestServer:
         self._port = _port_generator.get_port()
         startup_handler = asyncio.Event()
 
-        config = uvicorn.Config(
-            app=self.app,
-            host=self._host,
-            port=self._port,
-            log_level="error",
-            loop="asyncio"
-        )
+        config = uvicorn.Config(app=self.app, host=self._host, port=self._port, log_level="error", loop="asyncio")
 
         self._server = UvicornTestServer(config=config, startup_handler=startup_handler)
 
@@ -505,19 +480,14 @@ class AsyncTestServer:
         try:
             await asyncio.wait_for(startup_handler.wait(), timeout=self.startup_timeout)
 
-            self._client = AsyncTestClient(
-                base_url=self.base_url,
-                timeout=self.startup_timeout
-            )
+            self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout)
 
             self._startup_complete.set()
 
-        except (asyncio.TimeoutError, Exception) as e:
+        except (TimeoutError, Exception) as e:
             await self.stop()
             if isinstance(e, asyncio.TimeoutError):
-                raise RuntimeError(
-                    f"Server startup timed out on host {self._host} and port {self._port}"
-                ) from e
+                raise RuntimeError(f"Server startup timed out on host {self._host} and port {self._port}") from e
             raise
 
     async def stop(self) -> None:
@@ -543,10 +513,8 @@ class AsyncTestServer:
 
                 await asyncio.wait_for(self._server_task, timeout=self.shutdown_timeout)
 
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"Timeout waiting for server shutdown on host {self._host} port {self._port}"
-                )
+            except TimeoutError:
+                logger.error(f"Timeout waiting for server shutdown on host {self._host} port {self._port}")
                 if not self._server_task.done():
                     self._server_task.cancel()
                     await asyncio.gather(self._server_task, return_exceptions=True)
@@ -567,7 +535,7 @@ class AsyncTestServer:
             raise RuntimeError("Server is not running")
         return f"http://{self._host}:{self._port}"
 
-    async def __aenter__(self) -> 'AsyncTestServer':
+    async def __aenter__(self) -> "AsyncTestServer":
         await self.start()
         return self
 
@@ -583,7 +551,7 @@ class AsyncTestServer:
 
 @asynccontextmanager
 async def create_test_server(
-        lifespan: Optional[Lifespan[AppType]] = None,
+    lifespan: Lifespan[AppType] | None = None,
 ) -> AsyncGenerator[AsyncTestServer, None]:
     """Create and manage a TestServer instance with proper lifecycle"""
     server = AsyncTestServer(lifespan=lifespan)

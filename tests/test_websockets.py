@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 @pytest.fixture
 async def test_server():
     async with create_test_server() as server:
+
         @server.app.get("/api/data")
         async def get_data():
             return {"status": "ok"}
@@ -62,11 +63,7 @@ async def test_mixed_protocols(test_server):
     http_response = await test_server.client.get("/api/data")
     assert http_response.status_code == 200
 
-    config = WebSocketConfig(
-        subprotocols=["test-protocol"],
-        ping_interval=20.0,
-        ping_timeout=20.0
-    )
+    config = WebSocketConfig(subprotocols=["test-protocol"], ping_interval=20.0, ping_timeout=20.0)
 
     ws_response = await test_server.client.websocket("/ws/echo", config)
 

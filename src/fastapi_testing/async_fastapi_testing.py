@@ -209,6 +209,13 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError("WebSocket connections don't have status codes")
         return self._response.status_code
 
+    @property
+    def headers(self) -> httpx.Headers:
+        """Get response headers (HTTP only)."""
+        if self._is_websocket:
+            raise InvalidResponseTypeError("WebSocket connections don't have headers")
+        return self._response.headers
+
     def websocket(self) -> ClientConnection:
         """Get WebSocket connection (WebSocket only)."""
         if not self._is_websocket:

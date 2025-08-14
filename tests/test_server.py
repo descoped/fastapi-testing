@@ -7,7 +7,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from fastapi_testing import create_test_server
@@ -182,6 +182,54 @@ async def test_multiple_requests():
             await response.expect_status(200)
             data = await response.json()
             assert data["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_response_headers():
+    """Test accessing response headers"""
+    async with create_test_server() as server:
+
+        @server.app.get("/test-headers")
+        async def test_headers_endpoint():
+            return Response(
+                content="test content",
+                headers={
+                    "X-Custom-Header": "custom-value",
+                    "Content-Type": "text/plain",
+                }
+            )
+
+        response = await server.client.get("/test-headers")
+        await response.expect_status(200)
+
+        # Test accessing headers via the new property
+        assert response.headers["X-Custom-Header"] == "custom-value"
+        assert response.headers["Content-Type"] == "text/plain"
+
+        # Headers should be case-insensitive
+        assert response.headers.get("x-custom-header") == "custom-value"
+
+
+@pytest.mark.asyncio
+async def test_redirect_with_location_header():
+    """Test redirect response with Location header"""
+    async with create_test_server() as server:
+
+        @server.app.post("/login")
+        async def login_endpoint():
+            return Response(
+                status_code=302,
+                headers={"Location": "/dashboard"}
+            )
+
+        # Don't follow redirects to test the Location header
+        response = await server.client.post("/login", follow_redirects=False)
+        await response.expect_status(302)
+
+        # Test the new public API for accessing headers
+        assert response.headers["Location"] == "/dashboard"
+        location = response.headers.get("location")
+        assert location == "/dashboard"
 
 
 if __name__ == "__main__":

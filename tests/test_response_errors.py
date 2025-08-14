@@ -101,6 +101,25 @@ class TestAsyncTestResponseErrors:
                 await ws_response.websocket().close()
 
     @pytest.mark.asyncio
+    async def test_websocket_response_headers_error(self):
+        """Test accessing headers on WebSocket response raises error"""
+        async with create_test_server() as server:
+
+            @server.app.websocket("/ws")
+            async def ws_endpoint(websocket: WebSocket):
+                await websocket.accept()
+                with contextlib.suppress(WebSocketDisconnect):
+                    await websocket.receive_text()
+
+            ws_response = await server.client.websocket("/ws")
+
+            try:
+                with pytest.raises(InvalidResponseTypeError, match="WebSocket connections don't have headers"):
+                    _ = ws_response.headers
+            finally:
+                await ws_response.websocket().close()
+
+    @pytest.mark.asyncio
     async def test_http_response_normal_operations(self):
         """Test that HTTP responses work normally (for comparison)"""
         async with create_test_server() as server:
@@ -118,3 +137,5 @@ class TestAsyncTestResponseErrors:
             assert data["message"] == "success"
             text = await response.text()
             assert "success" in text
+            # Test headers access works for HTTP responses
+            assert response.headers is not None

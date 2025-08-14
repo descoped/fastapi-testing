@@ -1,6 +1,6 @@
 [project]
 name = "fastapi-testing"
-version = "0.3.2"
+version = "0.3.3"
 description = "A lightweight, async-first testing framework for FastAPI applications"
 authors = [
     { name = "Ove Ranheim", email = "oranheim@gmail.com" }
@@ -37,7 +37,7 @@ dev = [
     "pytest-asyncio>=0.25.2",
     "pytest-cov>=6.0.0",
     "pydantic>=2.10.6",
-    "ruff>=0.8.0",
+    "ruff>=0.12.0",
     "restructuredtext-lint>=1.4.0",
     "pygments>=2.19.1",
 ]

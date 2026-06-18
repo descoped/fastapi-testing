@@ -217,22 +217,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.116.1" },
+    { name = "fastapi", specifier = ">=0.137.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
-    { name = "starlette", specifier = ">=0.47.2" },
-    { name = "uvicorn", specifier = ">=0.35.0" },
-    { name = "websockets", specifier = ">=15.0.1" },
+    { name = "starlette", specifier = ">=1.3.1" },
+    { name = "uvicorn", specifier = ">=0.49.0" },
+    { name = "websockets", specifier = ">=16.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pydantic", specifier = ">=2.10.6" },
-    { name = "pygments", specifier = ">=2.19.1" },
-    { name = "pytest", specifier = ">=8.3.0" },
-    { name = "pytest-asyncio", specifier = ">=0.25.2" },
-    { name = "pytest-cov", specifier = ">=6.0.0" },
-    { name = "restructuredtext-lint", specifier = ">=1.4.0" },
-    { name = "ruff", specifier = ">=0.12.0" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pygments", specifier = ">=2.20.0" },
+    { name = "pytest", specifier = ">=9.1.0" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "restructuredtext-lint", specifier = ">=2.0.2" },
+    { name = "ruff", specifier = ">=0.15.17" },
 ]
 
 [[package]]

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # Models for testing
-class ItemStatus(str, Enum):
+class ItemStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"
     ARCHIVED = "archived"
@@ -196,7 +196,7 @@ async def test_response_headers():
                 headers={
                     "X-Custom-Header": "custom-value",
                     "Content-Type": "text/plain",
-                }
+                },
             )
 
         response = await server.client.get("/test-headers")
@@ -217,10 +217,7 @@ async def test_redirect_with_location_header():
 
         @server.app.post("/login")
         async def login_endpoint():
-            return Response(
-                status_code=302,
-                headers={"Location": "/dashboard"}
-            )
+            return Response(status_code=302, headers={"Location": "/dashboard"})
 
         # Don't follow redirects to test the Location header
         response = await server.client.post("/login", follow_redirects=False)

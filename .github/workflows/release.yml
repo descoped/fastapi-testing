@@ -41,7 +41,7 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v8.3.0
+      uses: astral-sh/setup-uv@v8.3.2
 
     - name: Verify version consistency
       run: |
@@ -73,7 +73,7 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v8.3.0
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         version: ${{ env.UV_VERSION }}
 
@@ -108,7 +108,7 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v8.3.0
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         version: ${{ env.UV_VERSION }}
 

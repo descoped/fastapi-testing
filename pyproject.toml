@@ -31,7 +31,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "httpx[http2]>=0.28.1",
     "websockets>=17.4",
-    "typing-extensions>=4.16.0 ; python_full_version < '3.12'",
+    "typing-extensions>=4.4.0 ; python_full_version < '3.12'",
 ]
 
 [dependency-groups]
@@ -94,11 +94,13 @@ asyncio_default_fixture_loop_scope = "function"
 # project environment as `.venv` next to this file; pyright does not find it on its own.
 venvPath = "."
 venv = ".venv"
-# Same scope as the CI gate; ty checks the tests too ([tool.ty] below).
-include = ["src", "tests/typing"]
+# Same scope as ty ([tool.ty.src]) and the CI gate.
+include = ["src", "tests"]
 # Check against the lowest supported Python so newer-only syntax is caught.
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
+# Every `pyright: ignore[...]` must still be needed, like ty's unused-ignore-comment.
+reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.ty]
 # Astral's type checker: `uv run ty check` (a dev dependency, so the version is locked and

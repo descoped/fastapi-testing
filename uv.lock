@@ -243,7 +243,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.165.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "starlette", specifier = ">=1.10.0" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.16.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.4.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
     { name = "websockets", specifier = ">=17.4" },
 ]

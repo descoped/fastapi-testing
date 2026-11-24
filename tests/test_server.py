@@ -3,7 +3,6 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated
 from uuid import UUID, uuid4
 
 import pytest
@@ -39,8 +38,8 @@ class ItemModel(BaseModel):
     description: str | None = None
     status: ItemStatus = ItemStatus.DRAFT
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    tags: Annotated[list[Tag], Field(default_factory=list)]
-    metadata: Annotated[dict[str, str], Field(default_factory=dict)]
+    tags: list[Tag] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
     @computed_field
     def is_active(self) -> bool:

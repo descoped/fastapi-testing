@@ -43,6 +43,17 @@ class TestOwnedSocket:
         assert port not in module._port_generator.used_ports
         assert server._socket is None
 
+    async def test_bound_port_is_exclusive_even_with_reuseaddr(self):
+        server = AsyncTestServer()
+        await server.start()
+        try:
+            with socket.socket() as rival:
+                rival.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                with pytest.raises(OSError):
+                    rival.bind(("127.0.0.1", server._port))
+        finally:
+            await server.stop()
+
     async def test_concurrent_servers_get_distinct_ports(self):
         servers = [AsyncTestServer() for _ in range(8)]
         await asyncio.gather(*(s.start() for s in servers))
@@ -267,7 +278,8 @@ class TestShutdown:
         await server.start()
         serve_task = server._server_task
         port = server._port
-        assert serve_task is not None and port is not None
+        assert serve_task is not None and port is not None and server._socket is not None
+        fd = server._socket.fileno()
 
         async def slow_close():
             await asyncio.sleep(5)
@@ -281,6 +293,8 @@ class TestShutdown:
 
         await asyncio.sleep(0)  # let the cancelled serve task finish unwinding
         assert serve_task.done()
+        # The closed socket is no longer registered with the event loop.
+        assert fd not in asyncio.get_running_loop()._selector.get_map()  # type: ignore[attr-defined]
         assert _port_refuses_connections(port)
         assert port not in module._port_generator.used_ports
 
@@ -297,3 +311,48 @@ class TestShutdown:
         with pytest.raises(ServerStartupError, match="exited during startup"):
             await starting
         assert server._port is None and server._socket is None
+
+
+class TestNonConformingLifespan:
+    """Raw ASGI apps that bend the lifespan protocol must not leave tasks behind."""
+
+    async def test_app_that_reports_failure_but_keeps_running_is_cancelled(self):
+        async def stubborn(scope, receive, send):
+            if scope["type"] == "lifespan":
+                await receive()
+                await send({"type": "lifespan.startup.failed", "message": "nope"})
+                await asyncio.sleep(30)  # neither returns nor raises
+
+        before = _pending_tasks()
+        server = AsyncTestServer(startup_timeout=10.0, shutdown_timeout=10.0)
+        server.app = stubborn  # type: ignore[assignment]
+        began = time.monotonic()
+        with pytest.raises(ServerStartupError, match="nope"):
+            await server.start()
+        # Cancelled at once, not after waiting out shutdown_timeout for a shutdown that cannot come.
+        assert time.monotonic() - began < 3.0
+        assert _pending_tasks() - before == set()
+
+    async def test_lifespan_ignoring_cancellation_does_not_hang_stop(self, monkeypatch):
+        async def ignores_cancel(scope, receive, send):
+            if scope["type"] == "lifespan":
+                await receive()
+                await send({"type": "lifespan.startup.complete"})
+                await receive()
+                try:
+                    await asyncio.sleep(30)  # never completes shutdown
+                except asyncio.CancelledError:
+                    await asyncio.sleep(0.5)  # swallows the first cancellation
+                return
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        monkeypatch.setattr(module._LifespanRunner, "cancel_timeout", 0.2)
+        server = AsyncTestServer(shutdown_timeout=0.5)
+        server.app = ignores_cancel  # type: ignore[assignment]
+        await server.start()
+        began = time.monotonic()
+        with pytest.raises(ServerShutdownError, match="did not complete"):
+            await server.stop()
+        assert time.monotonic() - began < 3.0
+        await asyncio.sleep(0.6)  # let the stubborn task finish on its own

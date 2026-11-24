@@ -386,7 +386,9 @@ server = AsyncTestServer(
 - **Shutdown:** `stop()` closes the client, stops accepting connections, gives open connections (for example SSE
   streams) `shutdown_timeout` to finish and then closes them, runs the lifespan shutdown, closes the socket and
   releases the port. If the lifespan shutdown fails or times out, `stop()` raises `ServerShutdownError` after all of
-  that is done. If `stop()` is cancelled or a step fails, the remaining steps still run before the error propagates.
+  that is done. If `stop()` is cancelled or a step fails, the remaining steps still run, without waiting, before the
+  error propagates; on that path the lifespan is cancelled rather than shut down, so the code after its `yield` does
+  not run.
 
 ### Global settings
 

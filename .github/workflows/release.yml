@@ -49,7 +49,7 @@ jobs:
 
     - name: Verify version consistency
       run: |
-        PYPROJECT_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        PYPROJECT_VERSION=$(uv run --locked python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
         TAG_VERSION="${{ steps.extract-version.outputs.version }}"
         
         if [[ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]]; then

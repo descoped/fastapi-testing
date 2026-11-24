@@ -46,6 +46,12 @@ async def server_types() -> None:
     async with AsyncTestServer() as server:
         assert_type(server, AsyncTestServer)
 
+    async with create_test_server(app=FastAPI(), client_timeout=5.0) as server:
+        assert_type(server.app, FastAPI)
+
+    # app and client_timeout are keyword-only
+    AsyncTestServer(None, 30.0, 10.0, FastAPI())  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
+
     # The lifespan must be a lifespan, not an arbitrary callable
     create_test_server(lifespan="startup")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]
 

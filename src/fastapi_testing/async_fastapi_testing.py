@@ -66,26 +66,41 @@ class Config:
         self.PORT_RANGE_END = port_range_end
 
     @classmethod
-    def from_env(cls, prefix: str = "FASTAPI_TESTING_") -> "Config":
-        """
-        Create configuration from environment variables.
-        This is an explicit opt-in method.
-        """
-        # Only look for variables with the specified prefix
-        env_vars = {k: v for k, v in os.environ.items() if k.startswith(prefix)}
+    def from_env(cls, prefix: str = "FASTAPI_TESTING_", *, strict: bool = False) -> "Config":
+        """Create configuration from environment variables, e.g. ``FASTAPI_TESTING_PORT_RANGE_START``.
 
-        # Convert to expected parameter names
+        A variable with the prefix that names no setting (a typo) or holds a
+        value of the wrong type is ignored and logged as a warning, and the
+        default is used. With ``strict=True`` it raises instead, as
+        ``from_file()`` does.
+
+        Raises:
+            ValueError: with ``strict=True``, unknown variables or invalid values.
+        """
         config_params: dict[str, Any] = {}
-        for env_key, env_value in env_vars.items():
+        problems: list[str] = []
+        for env_key, env_value in os.environ.items():
+            if not env_key.startswith(prefix):
+                continue
             config_key = env_key[len(prefix) :].lower()
-            # Handle type conversion
             if config_key in _INT_SETTINGS:
-                with suppress(ValueError):
-                    config_params[config_key] = int(env_value)
+                convert: type[int] | type[float] = int
             elif config_key in _FLOAT_SETTINGS:
-                with suppress(ValueError):
-                    config_params[config_key] = float(env_value)
+                convert = float
+            else:
+                problems.append(f"{env_key}: unknown setting")
+                continue
+            try:
+                config_params[config_key] = convert(env_value)
+            except ValueError:
+                kind = "an integer" if convert is int else "a number"
+                problems.append(f"{env_key}: must be {kind}, got {env_value!r}")
 
+        if problems:
+            if strict:
+                raise ValueError("Invalid fastapi-testing environment: " + "; ".join(sorted(problems)))
+            for problem in sorted(problems):
+                logger.warning("Ignoring environment variable %s", problem)
         return cls(**config_params)
 
     @classmethod
@@ -833,7 +848,19 @@ class AsyncTestServer:
       lifespan shutdown, close the socket, release the port. Every step runs
       even when an earlier one fails or ``stop()`` is cancelled.
 
-    ``app`` may be replaced (``server.app = create_app()``) before ``start()``.
+    Args:
+        lifespan: lifespan for the empty ``FastAPI`` app the server creates.
+        startup_timeout: seconds the application's lifespan startup and the
+            server's own startup may take together.
+        shutdown_timeout: seconds open connections get to finish, and then the
+            lifespan shutdown gets, when the server stops.
+        app: the application to serve, e.g. ``create_app()``. Its own lifespan
+            runs; combining it with ``lifespan`` is an error. Without it the
+            server creates an empty ``FastAPI`` app to add routes to.
+        client_timeout: timeout in seconds for each request made with
+            ``server.client`` and for opening its WebSocket connections.
+
+    ``app`` may also be replaced (``server.app = create_app()``) before ``start()``.
     """
 
     def __init__(
@@ -841,10 +868,16 @@ class AsyncTestServer:
         lifespan: Lifespan[FastAPI] | None = None,
         startup_timeout: float = 30.0,
         shutdown_timeout: float = 10.0,
+        *,
+        app: FastAPI | None = None,
+        client_timeout: float = 30.0,
     ):
-        self.app = FastAPI(lifespan=lifespan)
+        if app is not None and lifespan is not None:
+            raise ValueError("Pass either app or lifespan: an application brings its own lifespan")
+        self.app = app if app is not None else FastAPI(lifespan=lifespan)
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
+        self.client_timeout = client_timeout
         self._server_task: asyncio.Task[None] | None = None
         self._port: int | None = None
         self._host = "127.0.0.1"
@@ -945,7 +978,7 @@ class AsyncTestServer:
                     ) from error
                 raise ServerStartupError(f"Server startup timed out on host {self._host} and port {self._port}")
 
-            self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout, close_on_exit=False)
+            self._client = AsyncTestClient(base_url=self.base_url, timeout=self.client_timeout, close_on_exit=False)
         except BaseException:
             with suppress(Exception):
                 # stop() releases what was acquired; a lifespan shutdown error is
@@ -1081,9 +1114,22 @@ async def create_test_server(
     lifespan: Lifespan[FastAPI] | None = None,
     startup_timeout: float = 30.0,
     shutdown_timeout: float = 10.0,
+    *,
+    app: FastAPI | None = None,
+    client_timeout: float = 30.0,
 ) -> AsyncGenerator[AsyncTestServer, None]:
-    """Create and manage a TestServer instance with proper lifecycle"""
-    server = AsyncTestServer(lifespan=lifespan, startup_timeout=startup_timeout, shutdown_timeout=shutdown_timeout)
+    """Start an ``AsyncTestServer``, yield it, and stop it when the block exits.
+
+    The arguments are those of ``AsyncTestServer``. When the block raises, its
+    exception is what propagates; a shutdown error is attached to it as a note.
+    """
+    server = AsyncTestServer(
+        lifespan=lifespan,
+        startup_timeout=startup_timeout,
+        shutdown_timeout=shutdown_timeout,
+        app=app,
+        client_timeout=client_timeout,
+    )
     await server.start()  # releases everything itself when it fails
     try:
         yield server

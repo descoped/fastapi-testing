@@ -143,7 +143,7 @@ The `AsyncTestResponse` class provides convenient methods for assertions:
 
 ```python
 response = await server.client.get("/path")
-await response.expect_status(200)  # Assert status code
+await response.expect_status(200)  # Raises AssertionError with the actual status and body, also under python -O
 data = await response.json()  # Get JSON response
 text = await response.text()  # Get text response
 raw = response.httpx_response  # The underlying httpx.Response, for anything else
@@ -240,7 +240,7 @@ binary = await client.ws.receive_binary(ws_response)
 # Message Expectations
 await client.ws.expect_message(ws_response, expected="message", timeout=1.0)
 
-# Collect Multiple Messages
+# Collect messages until none arrives within the timeout or the server closes normally (an abnormal close raises)
 messages = await client.ws.drain_messages(ws_response, timeout=1.0)
 ```
 
@@ -404,7 +404,9 @@ server = AsyncTestServer(
 ### Global settings
 
 Port range, HTTP connection limits, WebSocket limits and connection retries are set with a `Config`. Activate it
-with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards:
+with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards.
+WebSocket connects retry connection errors (refused, closed early, timed out) `ws_retry_attempts` times, `ws_retry_delay` seconds
+apart; a rejected handshake such as a 403 or 404 fails at once:
 
 ```python
 from fastapi_testing import Config, set_config

@@ -8,7 +8,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi import WebSocket
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosedError, InvalidStatus
 
 from fastapi_testing import AsyncTestClient, Config, PortGenerator, create_test_server, get_config, set_config
 
@@ -34,6 +34,22 @@ async def test_expect_status_failure_names_both_codes_and_the_body():
         response = await server.client.get("/missing")
         with pytest.raises(AssertionError, match=r"Expected status 404, got 200: .*nothing here"):
             await response.expect_status(404)
+
+
+@pytest.mark.asyncio
+async def test_expect_status_truncates_a_long_body():
+    async with create_test_server() as server:
+
+        @server.app.get("/long")
+        async def long():
+            return "x" * 2000
+
+        response = await server.client.get("/long")
+        with pytest.raises(AssertionError) as info:
+            await response.expect_status(204)
+        message = str(info.value)
+        assert message.endswith("...")
+        assert len(message) < 600
 
 
 def test_expect_status_still_fails_under_python_optimize():
@@ -101,6 +117,21 @@ async def test_drain_messages_returns_what_arrived_before_the_server_closed():
 
         response = await server.client.websocket("/ws")
         assert await server.client.ws.drain_messages(response, timeout=1.0) == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_drain_messages_reports_an_abnormal_close():
+    async with create_test_server() as server:
+
+        @server.app.websocket("/ws")
+        async def ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.send_text("a")
+            raise RuntimeError("handler crashed")
+
+        response = await server.client.websocket("/ws")
+        with pytest.raises(ConnectionClosedError):
+            await server.client.ws.drain_messages(response, timeout=1.0)
 
 
 @pytest.mark.asyncio

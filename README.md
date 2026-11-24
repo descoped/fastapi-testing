@@ -240,7 +240,7 @@ binary = await client.ws.receive_binary(ws_response)
 # Message Expectations
 await client.ws.expect_message(ws_response, expected="message", timeout=1.0)
 
-# Collect messages until none arrives within the timeout or the server closes the connection
+# Collect messages until none arrives within the timeout or the server closes normally (an abnormal close raises)
 messages = await client.ws.drain_messages(ws_response, timeout=1.0)
 ```
 
@@ -399,7 +399,7 @@ server = AsyncTestServer(
 
 Port range, HTTP connection limits, WebSocket limits and connection retries are set with a `Config`. Activate it
 with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards.
-WebSocket connects retry connection errors (refused, timed out) `ws_retry_attempts` times, `ws_retry_delay` seconds
+WebSocket connects retry connection errors (refused, closed early, timed out) `ws_retry_attempts` times, `ws_retry_delay` seconds
 apart; a rejected handshake such as a 403 or 404 fails at once:
 
 ```python

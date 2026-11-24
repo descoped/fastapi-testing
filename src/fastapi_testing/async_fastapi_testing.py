@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Lifespan, Message, Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosedOK, InvalidMessage
 from websockets.protocol import State
 
 if sys.version_info >= (3, 12):
@@ -435,10 +435,12 @@ class WebSocketHelper:
 
     @staticmethod
     async def drain_messages(resp: AsyncTestResponse, timeout: float = 0.1) -> list[Any]:
-        """Receive messages until none arrives within ``timeout`` seconds or the connection closes.
+        """Receive messages until none arrives within ``timeout`` seconds or the connection closes normally.
 
-        Returns the messages received. A connection closed by the server ends the
-        drain, it does not lose what was already received.
+        Returns the messages received. A normal close by the server ends the
+        drain without losing what was already received. An abnormal close (for
+        example 1011 when the server's handler raised) propagates as
+        ``ConnectionClosedError``: the server failed, and the test should see it.
         """
         if timeout is None:
             raise ValueError("drain_messages() needs a timeout; without one it would wait forever")
@@ -447,7 +449,7 @@ class WebSocketHelper:
         try:
             while True:
                 messages.append(await asyncio.wait_for(ws.recv(), timeout))
-        except (TimeoutError, ConnectionClosed):
+        except (TimeoutError, ConnectionClosedOK):
             pass
         return messages
 
@@ -529,7 +531,8 @@ class AsyncTestClient:
     ) -> AsyncTestResponse:
         """Create a websocket connection with configuration.
 
-        Connection errors (refused, timed out) are retried ``WS_RETRY_ATTEMPTS``
+        Connection errors (refused, closed before the handshake answer, timed
+        out) are retried ``WS_RETRY_ATTEMPTS``
         times; a rejected handshake (for example 403 or 404) fails at once.
         """
         ws_url = self._websocket_url(path)
@@ -557,15 +560,16 @@ class AsyncTestClient:
         if options:
             connect_kwargs.update(options)
 
-        # Retry only what can be transient: the server not accepting yet, or a
-        # timeout. A rejected handshake (InvalidStatus) or a bad URI is final.
+        # Retry only what can be transient: the server not accepting yet, closing
+        # the connection before answering (InvalidMessage), or a timeout. A
+        # rejected handshake (InvalidStatus) or a bad URI is final.
         attempts = max(global_config.WS_RETRY_ATTEMPTS, 1)
         attempt = 1
         while True:
             try:
                 ws = await connect(ws_url, **connect_kwargs)
                 break
-            except (OSError, TimeoutError) as e:
+            except (OSError, TimeoutError, InvalidMessage) as e:
                 logger.debug("WebSocket connection attempt %d/%d to %s failed: %s", attempt, attempts, ws_url, e)
                 if attempt >= attempts:
                     raise

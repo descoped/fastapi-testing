@@ -55,13 +55,15 @@ jobs:
           # OAuth token from `claude setup-token` (Pro/Max subscription), not a
           # Console API key. Set as an organization secret.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: "Review this PR. fastapi-testing is a public, async-first integration testing library for FastAPI on PyPI: it runs a real uvicorn server on a free port and gives tests an httpx and websockets client. It supports every Python version in the pyproject.toml classifiers (3.11 and up; requires-python is the floor), so flag any syntax or API that does not exist on the floor version. Check correctness first: async lifecycle and cleanup on every path (startup failure, timeout, cancellation, stop() twice), leaked ports, tasks, httpx clients or WebSocket connections, swallowed CancelledError, and exception chaining. Then the public API: anything exported from src/fastapi_testing/__init__.py or documented in README.md must not change incompatibly without being called out, and README examples must match the code. Then type safety, tests (every fix needs a test that would fail without it), dependency changes in pyproject.toml and uv.lock (breaking changes in the upgraded packages, floors that match what the code uses), CI workflow changes, hardcoded values and leaked secrets, and AI attribution lines in commits or the PR body (none allowed). Distinguish CRITICAL (must fix before merge) from SUGGESTION (non-blocking). Post one concise PR review with file:line citations. If the PR is clean, say so plainly; do not manufacture issues. Complete the entire review within this run and post the consolidated review before ending; never end the turn while any review pass is deferred, backgrounded or promised for later."
+          prompt: "Review this PR. fastapi-testing is a public, async-first integration testing library for FastAPI on PyPI: it runs a real uvicorn server on a free port and gives tests an httpx and websockets client. It supports every Python version in the pyproject.toml classifiers (3.11 and up; requires-python is the floor), so flag any syntax or API that does not exist on the floor version. Check correctness first: async lifecycle and cleanup on every path (startup failure, timeout, cancellation, stop() twice), leaked ports, tasks, httpx clients or WebSocket connections, swallowed CancelledError, and exception chaining. Then the public API: anything exported from src/fastapi_testing/__init__.py or documented in README.md must not change incompatibly without being called out, and README examples must match the code. Then type safety, tests (every fix needs a test that would fail without it), dependency changes in pyproject.toml and uv.lock (breaking changes in the upgraded packages, floors that match what the code uses), CI workflow changes, hardcoded values and leaked secrets, and AI attribution lines in commits or the PR body (none allowed). Distinguish CRITICAL (must fix before merge) from SUGGESTION (non-blocking). This runner can only read the code (gh pr diff/view, git diff/log/show, Read, Grep, Glob); it cannot install packages or run tests, and CI runs the test matrix, so do not plan or list those steps. Post one concise PR review with file:line citations. If the PR is clean, say so plainly; do not manufacture issues. Complete the entire review within this run and post the consolidated review before ending; never end the turn while any review pass is deferred, backgrounded or promised for later."
           track_progress: true
           allowed_bots: 'renovate[bot]'
 
       # The job succeeds even when the review never posted: the action edits one
-      # placeholder comment in place, and a run that ends early leaves its
-      # checklist unticked. An unticked box in that comment fails the job.
+      # placeholder comment in place. A finished review replaces its header with
+      # "Claude finished ..."; a run that errors, times out or ends early does not.
+      # (Unticked checklist boxes are not a signal: the reviewer may leave a step
+      # it could not do, such as running tests, deliberately unticked.)
       - name: Fail when the review did not post
         if: ${{ always() }}
         env:
@@ -70,7 +72,7 @@ jobs:
         run: |
           body=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
             --jq '[.[] | select(.user.login == "claude[bot]")] | last | .body // ""')
-          if printf '%s' "$body" | grep -q -- '- \[ \]'; then
-            echo "::error::the review comment still has unchecked boxes; the review did not post"
+          if ! printf '%s' "$body" | grep -q 'Claude finished'; then
+            echo "::error::the review comment never reached 'Claude finished'; the review did not post"
             exit 1
           fi

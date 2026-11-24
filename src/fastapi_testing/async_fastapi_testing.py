@@ -76,8 +76,9 @@ class Config:
             problem = _out_of_range(name, value)
             if problem:
                 raise ValueError(f"{name} {problem}, got {value!r}")
-        if port_range_start > port_range_end:
-            raise ValueError(f"port_range_start ({port_range_start}) is above port_range_end ({port_range_end})")
+        problem = _port_range_problem(port_range_start, port_range_end)
+        if problem:
+            raise ValueError(problem)
         self.WS_MAX_MESSAGE_SIZE = ws_max_message_size
         self.WS_MAX_QUEUE_SIZE = ws_max_queue_size
         self.HTTP_MAX_KEEPALIVE = http_max_keepalive
@@ -120,6 +121,16 @@ class Config:
                 problems.append(f"{env_key}: {out_of_range}, got {env_value!r}")
                 continue
             config_params[config_key] = value
+
+        if "port_range_start" in config_params or "port_range_end" in config_params:
+            start = config_params.get("port_range_start", _DEFAULT_PORT_RANGE[0])
+            end = config_params.get("port_range_end", _DEFAULT_PORT_RANGE[1])
+            port_problem = _port_range_problem(start, end)
+            if port_problem:
+                names = f"{prefix}PORT_RANGE_START/{prefix}PORT_RANGE_END"
+                problems.append(f"{names}: {port_problem}")
+                config_params.pop("port_range_start", None)
+                config_params.pop("port_range_end", None)
 
         if problems:
             if strict:
@@ -168,6 +179,11 @@ class Config:
             out_of_range = _out_of_range(key, value)
             if out_of_range:
                 raise ValueError(f"{path}: {key!r} {out_of_range}, got {value!r}")
+        port_problem = _port_range_problem(
+            data.get("port_range_start", _DEFAULT_PORT_RANGE[0]), data.get("port_range_end", _DEFAULT_PORT_RANGE[1])
+        )
+        if port_problem:
+            raise ValueError(f"{path}: {port_problem}")
 
         return cls(**data)
 
@@ -185,12 +201,27 @@ def _describe(kind: type) -> str:
     return "an integer" if kind is int else "a number"
 
 
+_DEFAULT_PORT_RANGE = (
+    inspect.signature(Config.__init__).parameters["port_range_start"].default,
+    inspect.signature(Config.__init__).parameters["port_range_end"].default,
+)
+
+
+def _port_range_problem(start: int, end: int) -> str | None:
+    """Why ``start``..``end`` is not a usable port range, or None when it is."""
+    if start > end:
+        return f"port_range_start ({start}) is above port_range_end ({end})"
+    return None
+
+
 # The lowest value each setting accepts; ports also have an upper bound.
 _MINIMUMS: dict[str, float] = {"http_max_keepalive": 0, "ws_retry_delay": 0}
 
 
-def _out_of_range(name: str, value: float) -> str | None:
+def _out_of_range(name: str, value: object) -> str | None:
     """Why ``value`` is not acceptable for setting ``name``, or None when it is."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "must be a number"
     if name.startswith("port_range_"):
         return None if 1 <= value <= 65535 else "must be a port number from 1 to 65535"
     if not math.isfinite(value):

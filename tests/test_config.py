@@ -422,3 +422,41 @@ class TestSettingRanges:
             config = Config.from_env()
         assert config.WS_RETRY_DELAY == 1.0  # the default
         assert any("must be at least 0" in r.getMessage() for r in caplog.records)
+
+
+class TestPortRangeFromSources:
+    """A start above the end is reported like any other bad value, by every source."""
+
+    def test_from_env_ignores_an_inverted_range_with_a_warning(self, caplog):
+        with patch.dict("os.environ", {"FASTAPI_TESTING_PORT_RANGE_START": "9100"}, clear=True):
+            config = Config.from_env()
+        assert (config.PORT_RANGE_START, config.PORT_RANGE_END) == (8001, 9000)  # the defaults
+        assert any(
+            "FASTAPI_TESTING_PORT_RANGE_START/FASTAPI_TESTING_PORT_RANGE_END: port_range_start (9100) is above" in m
+            for m in (r.getMessage() for r in caplog.records)
+        )
+
+    def test_from_env_strict_lists_it_with_the_other_problems(self):
+        env = {"FASTAPI_TESTING_PORT_RANGE_START": "9100", "FASTAPI_TESTING_WS_RETRY_DELAY": "inf"}
+        with patch.dict("os.environ", env, clear=True), pytest.raises(ValueError) as info:
+            Config.from_env(strict=True)
+        assert "port_range_start (9100) is above port_range_end (9000)" in str(info.value)
+        assert "FASTAPI_TESTING_WS_RETRY_DELAY: must be a finite number" in str(info.value)
+
+    def test_from_env_accepts_a_range_moved_as_a_whole(self):
+        env = {"FASTAPI_TESTING_PORT_RANGE_START": "9100", "FASTAPI_TESTING_PORT_RANGE_END": "9200"}
+        with patch.dict("os.environ", env, clear=True):
+            config = Config.from_env(strict=True)
+        assert (config.PORT_RANGE_START, config.PORT_RANGE_END) == (9100, 9200)
+
+    def test_from_file_names_the_file(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text('{"port_range_start": 9100}')
+        with pytest.raises(
+            ValueError, match=r"settings.json: port_range_start \(9100\) is above port_range_end \(9000\)"
+        ):
+            Config.from_file(path)
+
+    def test_constructor_rejects_a_non_number_with_value_error(self):
+        with pytest.raises(ValueError, match="ws_retry_delay must be a number"):
+            Config(ws_retry_delay="1")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]

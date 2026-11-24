@@ -42,6 +42,10 @@ class MyClient(AsyncTestClient):
     pass
 
 
+class MyResponse(AsyncTestResponse):
+    pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield
@@ -95,6 +99,10 @@ async def client_types(client: AsyncTestClient) -> None:
 
     # The status code is an int
     await response.expect_status("200")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]
+
+
+async def response_subclass_types(response: MyResponse) -> None:
+    assert_type(await response.expect_status(200), MyResponse)
 
 
 def config_types() -> None:

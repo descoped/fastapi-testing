@@ -221,13 +221,17 @@ class PortGenerator:
         return global_config.PORT_RANGE_END if self._end is None else self._end
 
     @staticmethod
-    def is_port_available(port: int) -> bool:
-        import socket
-        from contextlib import closing
+    def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
+        """Whether ``bind()`` could bind ``port`` on ``host`` right now.
 
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        Uses the same socket options as ``bind()``, so a port another socket
+        holds counts as taken, while a port left in TIME_WAIT by a closed
+        connection (common for recently used ephemeral ports) does not.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.bind(("localhost", port))
+                sock.bind((host, port))
                 return True
             except (OSError, OverflowError):
                 return False

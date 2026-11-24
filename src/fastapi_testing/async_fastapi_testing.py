@@ -1,7 +1,10 @@
 import asyncio
 import json
 import logging
+import math
 import os
+import random
+import socket
 import tomllib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
@@ -13,7 +16,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.applications import AppType
-from starlette.types import Lifespan
+from starlette.types import ASGIApp, Lifespan, Message, Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.protocol import State
 
@@ -158,6 +161,14 @@ class ServerStartupError(RuntimeError):
     """Raised when the test server fails to start or does not start in time."""
 
 
+class ServerShutdownError(RuntimeError):
+    """Raised by ``stop()`` when the application's lifespan shutdown fails or times out.
+
+    It is raised after every resource (connections, server, socket, port) has
+    been released, so the failing test reports it without leaking anything.
+    """
+
+
 @dataclass
 class WebSocketConfig:
     """WebSocket connection configuration.
@@ -222,12 +233,14 @@ class PortGenerator:
                 return False
 
     def get_port(self) -> int:
-        """Get an available port from the pool."""
+        """Get an available port from the pool.
+
+        The port is only checked, not held: another process can take it before
+        it is bound. ``AsyncTestServer`` uses ``bind()`` instead.
+        """
         available_ports = set(range(self.start, self.end + 1)) - self.used_ports
         if not available_ports:
             raise RuntimeError(f"No available ports in range {self.start}-{self.end}")
-
-        import random
 
         while available_ports:
             port = random.choice(list(available_ports))
@@ -240,6 +253,31 @@ class PortGenerator:
     def release_port(self, port: int) -> None:
         """Release a port back to the pool."""
         self.used_ports.discard(port)
+
+    def bind(self, host: str) -> socket.socket:
+        """Bind a TCP socket on ``host`` to a free port in the range and reserve it.
+
+        Binding is the availability check, so unlike ``get_port()`` followed by
+        a later bind, no other process can take the port in between. The
+        caller owns the socket and must close it and call ``release_port()``.
+        """
+        candidates = list(set(range(self.start, self.end + 1)) - self.used_ports)
+        if not candidates:
+            raise RuntimeError(f"No available ports in range {self.start}-{self.end}")
+        random.shuffle(candidates)
+        for port in candidates:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Lets a port from a just-finished test (in TIME_WAIT) be reused;
+            # it does not allow binding a port another socket is listening on.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+            except (OSError, OverflowError):
+                sock.close()
+                continue
+            self.used_ports.add(port)
+            return sock
+        raise RuntimeError(f"No available ports found in range {self.start}-{self.end}")
 
 
 class AsyncTestResponse:
@@ -517,12 +555,124 @@ class UvicornTestServer(uvicorn.Server):
             self.startup_handler.set()
 
 
+class _LifespanRunner:
+    """Runs an ASGI application's lifespan protocol in a task this library owns.
+
+    uvicorn runs the lifespan in a task it keeps no reference to, exits the
+    process on startup failure and only logs shutdown failures. Driving the
+    protocol here instead gives ``AsyncTestServer`` control over it: a hung
+    startup or shutdown can be timed out and cancelled, and failures surface
+    as exceptions chained to the application's own error. The whole
+    application is called, so middleware sees the lifespan scope as usual.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self.state: dict[str, Any] = {}
+        self._messages: asyncio.Queue[Message] = asyncio.Queue()
+        self._startup_done = asyncio.Event()
+        self._shutdown_done = asyncio.Event()
+        self._failure: str | None = None
+        self._receive_calls = 0
+        self.unsupported = False
+        self.task: asyncio.Task[None] | None = None
+
+    async def _receive(self) -> Message:
+        self._receive_calls += 1
+        return await self._messages.get()
+
+    async def _send(self, message: Message) -> None:
+        kind = message["type"]
+        if kind in ("lifespan.startup.failed", "lifespan.shutdown.failed"):
+            self._failure = message.get("message") or kind
+        if kind.startswith("lifespan.startup."):
+            self._startup_done.set()
+        elif kind.startswith("lifespan.shutdown."):
+            self._shutdown_done.set()
+
+    async def _main(self) -> None:
+        scope: Scope = {"type": "lifespan", "asgi": {"version": "3.0", "spec_version": "2.0"}, "state": self.state}
+        try:
+            await self.app(scope, self._receive, self._send)
+        except Exception:
+            if self._receive_calls == 0:
+                # Raised before reading the startup message: the application does
+                # not implement the lifespan protocol (uvicorn's "auto" mode).
+                self.unsupported = True
+                logger.debug("Application does not support lifespan; continuing without it", exc_info=True)
+                return
+            raise
+        finally:
+            self._startup_done.set()
+            self._shutdown_done.set()
+
+    async def _wait(self, done: asyncio.Event, timeout: float, phase: str) -> None:
+        assert self.task is not None
+        waiter = asyncio.ensure_future(done.wait())
+        try:
+            finished, _ = await asyncio.wait({waiter, self.task}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            waiter.cancel()
+        if not finished:
+            await self.cancel()
+            raise TimeoutError(f"Application {phase} did not complete within {timeout}s")
+        if self._failure is not None or (self.task.done() and not self.unsupported):
+            # Give the application a moment to raise after reporting failure, so
+            # the original exception can be chained.
+            await asyncio.wait({self.task}, timeout=1.0)
+            error = self.task.exception() if self.task.done() and not self.task.cancelled() else None
+            if self._failure is None and error is None:
+                if phase == "shutdown":
+                    return  # The application returned after shutting down: fine.
+                raise RuntimeError(f"Application returned during {phase}")
+            # Prefer the exception itself: the failure message from Starlette is a full traceback.
+            raise RuntimeError(
+                f"Application {phase} failed: {error!r}" if error else f"Application {phase} failed: {self._failure}"
+            ) from error
+
+    async def startup(self, timeout: float) -> None:
+        self.task = asyncio.create_task(self._main(), name="fastapi-testing lifespan")
+        await self._messages.put({"type": "lifespan.startup"})
+        await self._wait(self._startup_done, timeout, "startup")
+
+    async def shutdown(self, timeout: float) -> None:
+        if self.task is None or self.task.done():
+            return
+        await self._messages.put({"type": "lifespan.shutdown"})
+        await self._wait(self._shutdown_done, timeout, "shutdown")
+        # The application is expected to return after shutdown.complete.
+        if not self.task.done():
+            await asyncio.wait({self.task}, timeout=1.0)
+            await self.cancel()
+
+    async def cancel(self) -> None:
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+            await asyncio.wait({self.task})
+
+
 # Use the configurable PortGenerator instance
 _port_generator = PortGenerator()
 
 
 class AsyncTestServer:
-    """Async test server with proper lifecycle management and WebSocket support."""
+    """Async test server with proper lifecycle management and WebSocket support.
+
+    The server owns its whole lifecycle; uvicorn only serves connections:
+
+    * The listening socket is bound by this class (no port race) and always
+      closed by ``stop()``.
+    * The application's lifespan runs in a task owned by this class: startup
+      failures raise ``ServerStartupError`` chained to the application's own
+      exception, a hung startup fails within ``startup_timeout``, and shutdown
+      failures raise ``ServerShutdownError``.
+    * ``stop()`` runs in a fixed order: close the client, stop HTTP (open
+      connections get ``shutdown_timeout`` to finish, then are closed), run the
+      lifespan shutdown, close the socket, release the port. Every step runs
+      even when an earlier one fails or ``stop()`` is cancelled.
+
+    ``app`` may be replaced (``server.app = create_app()``) before ``start()``.
+    """
 
     def __init__(
         self,
@@ -538,48 +688,94 @@ class AsyncTestServer:
         self._host = "127.0.0.1"
         self._client: AsyncTestClient | None = None
         self._server: UvicornTestServer | None = None
+        self._socket: socket.socket | None = None
+        self._lifespan: _LifespanRunner | None = None
+
+    async def _asgi(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """The ASGI entry point given to uvicorn.
+
+        uvicorn runs with ``lifespan="off"``, so it would hand every request an
+        empty ``state``; copy in the state the lifespan yielded instead, as
+        uvicorn does when it runs the lifespan itself.
+        """
+        if self._lifespan is not None and scope["type"] in ("http", "websocket"):
+            scope["state"] = {**self._lifespan.state, **scope.get("state", {})}
+        await self.app(scope, receive, send)
 
     async def _serve(self) -> None:
         """Run uvicorn, turning its ``sys.exit()`` on startup failure into an exception.
 
-        uvicorn exits the process when binding or lifespan startup fails. A
-        ``SystemExit`` escaping an asyncio task stops the whole event loop, so
-        it is converted here and reported by ``start()`` instead.
+        With the socket and lifespan owned here, uvicorn has little left that can
+        fail at startup, but a ``SystemExit`` escaping an asyncio task would stop
+        the whole event loop, so it is still converted and reported by ``start()``.
         """
-        assert self._server is not None
+        assert self._server is not None and self._socket is not None
         try:
-            await self._server.serve()
+            await self._server.serve(sockets=[self._socket])
         except SystemExit as e:
             raise ServerStartupError(
                 f"Server failed to start on host {self._host} and port {self._port} (uvicorn exit code {e.code})"
             ) from e
 
     async def start(self) -> None:
-        """Start the server asynchronously with proper lifecycle management.
+        """Start the server: bind the socket, run lifespan startup, then serve.
 
         Raises:
-            ServerStartupError: uvicorn failed to start, or did not start in time.
+            ServerStartupError: no free port, the application's lifespan startup
+                failed or timed out, or uvicorn failed to start. Everything
+                acquired so far is released first.
         """
-        if self._server_task is not None:
+        if self._server_task is not None or self._lifespan is not None:
             raise RuntimeError("Server is already running")
 
-        self._port = _port_generator.get_port()
-        startup_handler = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.startup_timeout
 
-        config = uvicorn.Config(app=self.app, host=self._host, port=self._port, log_level="error", loop="asyncio")
-
-        self._server = UvicornTestServer(config=config, startup_handler=startup_handler)
-
-        self._server_task = asyncio.create_task(self._serve())
-        started = asyncio.create_task(startup_handler.wait())
+        def remaining() -> float:
+            return max(deadline - loop.time(), 0.0)
 
         try:
-            done, _ = await asyncio.wait(
-                {self._server_task, started}, timeout=self.startup_timeout, return_when=asyncio.FIRST_COMPLETED
+            try:
+                self._socket = _port_generator.bind(self._host)
+            except RuntimeError as e:
+                raise ServerStartupError(str(e)) from e
+            port: int = self._socket.getsockname()[1]
+            self._port = port
+
+            self._lifespan = _LifespanRunner(self.app)
+            try:
+                await self._lifespan.startup(timeout=remaining())
+            except TimeoutError as e:
+                raise ServerStartupError(
+                    f"Server startup timed out on host {self._host} and port {self._port}: {e}"
+                ) from e
+            except RuntimeError as e:
+                raise ServerStartupError(f"{e} (host {self._host}, port {self._port})") from (e.__cause__ or e)
+
+            startup_handler = asyncio.Event()
+            config = uvicorn.Config(
+                app=self._asgi,
+                host=self._host,
+                port=port,
+                log_level="error",
+                lifespan="off",
+                interface="asgi3",
+                # uvicorn types this as whole seconds.
+                timeout_graceful_shutdown=math.ceil(self.shutdown_timeout),
             )
+            self._server = UvicornTestServer(config=config, startup_handler=startup_handler)
+            self._server_task = asyncio.create_task(self._serve(), name="fastapi-testing uvicorn")
+            started = asyncio.ensure_future(startup_handler.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {self._server_task, started}, timeout=remaining(), return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                started.cancel()
             if started not in done:
                 if self._server_task in done:
-                    error = self._server_task.exception()
+                    task = self._server_task
+                    error = None if task.cancelled() else task.exception()
                     if isinstance(error, ServerStartupError):
                         raise error
                     raise ServerStartupError(
@@ -589,55 +785,81 @@ class AsyncTestServer:
 
             self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout)
         except BaseException:
-            started.cancel()
-            # Startup never completed, so uvicorn cannot shut down gracefully
-            # (it does not check should_exit while lifespan startup runs).
-            # Cancel it outright instead of waiting shutdown_timeout for nothing.
-            if self._server_task is not None and not self._server_task.done():
-                self._server_task.cancel()
-            await self.stop()
+            with suppress(Exception):
+                # stop() releases what was acquired; a lifespan shutdown error is
+                # secondary to the startup failure being reported.
+                await self.stop()
             raise
 
     async def stop(self) -> None:
-        """Stop the server and clean up all resources including WebSocket connections.
+        """Stop the server and release every resource, in a fixed order.
 
-        Safe to call more than once, and after a failed ``start()``. If the
-        task calling ``stop()`` is cancelled, the cancellation propagates after
-        the port has been released.
+        1. Close the client and its WebSocket connections.
+        2. Stop HTTP: stop accepting, give open connections ``shutdown_timeout``
+           to finish, then close them (uvicorn's graceful shutdown).
+        3. Run the application's lifespan shutdown, within ``shutdown_timeout``.
+        4. Close the socket and release the port.
+
+        Safe to call more than once and after a failed ``start()``. If a step
+        fails or ``stop()`` is cancelled, the remaining steps still run (without
+        waiting) before the error or cancellation propagates.
+
+        Raises:
+            ServerShutdownError: the lifespan shutdown failed or timed out.
         """
+        client, self._client = self._client, None
+        server, self._server = self._server, None
+        task, self._server_task = self._server_task, None
+        lifespan, self._lifespan = self._lifespan, None
+        sock, self._socket = self._socket, None
+        port, self._port = self._port, None
+
+        shutdown_error: BaseException | None = None
+        graceful = False
         try:
-            if self._client:
-                await self._client.close()
-                self._client = None
+            if client is not None:
+                await client.close()
 
-            if self._server_task:
-                task = self._server_task
+            if task is not None:
+                if server is not None:
+                    server.should_exit = True
+                # uvicorn bounds the connection wait by timeout_graceful_shutdown;
+                # the margin covers its own polling and closing.
+                await asyncio.wait({task}, timeout=self.shutdown_timeout + 5.0)
+                if not task.done() and server is not None:
+                    logger.error("Forcing server exit on host %s port %s", self._host, port)
+                    server.force_exit = True
+                    await asyncio.wait({task}, timeout=2.0)
+
+            if lifespan is not None:
                 try:
-                    if self._server:
-                        self._server.should_exit = True
-
-                    await asyncio.wait_for(task, timeout=self.shutdown_timeout)
-
-                except TimeoutError:
-                    logger.error("Timeout waiting for server shutdown on host %s port %s", self._host, self._port)
-                    if not task.done():
-                        task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
-                except asyncio.CancelledError:
-                    current = asyncio.current_task()
-                    if current is not None and current.cancelling():
-                        raise  # The caller of stop() is being cancelled: never swallow that.
-                    logger.debug("Server task was cancelled")
-                except Exception:
-                    # A failed startup is reported by start(); anything else is not actionable here.
-                    logger.debug("Server task ended with an error", exc_info=True)
-                finally:
-                    self._server_task = None
-                    self._server = None
+                    await lifespan.shutdown(timeout=self.shutdown_timeout)
+                except (TimeoutError, RuntimeError) as e:
+                    shutdown_error = e
+            graceful = True
         finally:
-            if self._port:
-                _port_generator.release_port(self._port)
-                self._port = None
+            # Runs also when a step above failed or stop() was cancelled.
+            try:
+                if task is not None and not task.done():
+                    task.cancel()
+                    if graceful:
+                        await asyncio.wait({task})
+                if lifespan is not None and not graceful and lifespan.task is not None:
+                    # Interrupted: cancel the lifespan rather than wait for it.
+                    lifespan.task.cancel()
+                if task is not None and task.done() and not task.cancelled() and task.exception() is not None:
+                    # A failed startup is reported by start(); anything else is not actionable here.
+                    logger.debug("Server task ended with an error", exc_info=task.exception())
+            finally:
+                if sock is not None:
+                    sock.close()
+                if port is not None:
+                    _port_generator.release_port(port)
+
+        if shutdown_error is not None:
+            raise ServerShutdownError(f"{shutdown_error} (host {self._host}, port {port})") from (
+                shutdown_error.__cause__ or shutdown_error
+            )
 
     @property
     def base_url(self) -> str:
@@ -662,9 +884,11 @@ class AsyncTestServer:
 @asynccontextmanager
 async def create_test_server(
     lifespan: Lifespan[AppType] | None = None,
+    startup_timeout: float = 30.0,
+    shutdown_timeout: float = 10.0,
 ) -> AsyncGenerator[AsyncTestServer, None]:
     """Create and manage a TestServer instance with proper lifecycle"""
-    server = AsyncTestServer(lifespan=lifespan)
+    server = AsyncTestServer(lifespan=lifespan, startup_timeout=startup_timeout, shutdown_timeout=shutdown_timeout)
     try:
         await server.start()
         yield server

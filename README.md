@@ -344,10 +344,29 @@ You can customize the server behavior:
 
 ```python
 server = AsyncTestServer(
-    startup_timeout=30.0,  # Seconds to wait for server startup
-    shutdown_timeout=10.0,  # Seconds to wait for server shutdown
+    startup_timeout=30.0,  # Seconds for lifespan startup plus the server becoming ready
+    shutdown_timeout=10.0,  # Seconds open connections get to finish, and again for lifespan shutdown
 )
 ```
+
+`create_test_server()` accepts the same `startup_timeout` and `shutdown_timeout` arguments.
+
+### Lifecycle guarantees
+
+`AsyncTestServer` owns the whole lifecycle; uvicorn only serves connections:
+
+- **Socket:** the server binds its own listening socket on `127.0.0.1` to a free port in the configured range, so no
+  other process can take the port between choosing and binding it. `stop()` always closes it.
+- **Lifespan:** the application's lifespan runs in a task the server owns, through the full ASGI application (so
+  middleware sees it). State yielded by the lifespan reaches `request.state` and `websocket.state`. You can assign
+  `server.app = create_app()` before `start()`; its lifespan is the one that runs.
+- **Startup:** lifespan startup runs first, then the server starts serving. If either fails or takes longer than
+  `startup_timeout`, `start()` releases everything acquired so far and raises `ServerStartupError`, chained to the
+  application's own exception.
+- **Shutdown:** `stop()` closes the client, stops accepting connections, gives open connections (for example SSE
+  streams) `shutdown_timeout` to finish and then closes them, runs the lifespan shutdown, closes the socket and
+  releases the port. If the lifespan shutdown fails or times out, `stop()` raises `ServerShutdownError` after all of
+  that is done. If `stop()` is cancelled or a step fails, the remaining steps still run before the error propagates.
 
 ### Global settings
 
@@ -420,10 +439,10 @@ All tests follow modern async/await patterns and avoid mocks to ensure real-worl
 
 The framework provides clear error messages for common issues:
 
-- Server startup failures: if the app's lifespan startup raises, the port cannot be bound, or startup times out,
-  `start()` raises `ServerStartupError` (a `RuntimeError`) and releases the port, instead of uvicorn exiting the
-  test process
-- Server startup timeout
+- Server startup failures: if the app's lifespan startup raises, no port is free, or startup times out, `start()`
+  raises `ServerStartupError` (a `RuntimeError`), chained to the original exception, and releases everything
+- Server shutdown failures: if the app's lifespan shutdown raises or hangs, `stop()` raises `ServerShutdownError`
+  (a `RuntimeError`) after releasing everything, so the test that caused it fails
 - Port allocation failures
 - Connection errors
 - Invalid request formats

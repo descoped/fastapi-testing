@@ -34,28 +34,36 @@ class TestStartupFailure:
 
     async def test_lifespan_failure_raises_and_releases_port(self):
         server = AsyncTestServer(lifespan=failing_lifespan, startup_timeout=10.0)
-        with pytest.raises(ServerStartupError, match="uvicorn exit code"):
+        with pytest.raises(ServerStartupError, match="Application startup failed") as excinfo:
             await server.start()
 
+        # The application's own exception is chained, not a uvicorn exit code.
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert str(excinfo.value.__cause__) == "lifespan startup failed"
         assert server._server_task is None
         assert server._port is None
         assert module._port_generator.used_ports == set()
 
         await server.stop()  # still safe after a failed start
 
-    async def test_bind_failure_raises_and_releases_port(self, monkeypatch):
+    async def test_no_free_port_raises_and_leaks_nothing(self):
+        original = get_config()
         with socket.socket() as blocker:
             blocker.bind(("127.0.0.1", 0))
             blocker.listen()
             taken = blocker.getsockname()[1]
-            monkeypatch.setattr(module._port_generator, "get_port", lambda: taken)
-
-            server = AsyncTestServer(startup_timeout=10.0)
-            with pytest.raises(ServerStartupError):
-                await server.start()
+            set_config(Config(port_range_start=taken, port_range_end=taken))
+            try:
+                server = AsyncTestServer(startup_timeout=10.0)
+                with pytest.raises(ServerStartupError, match="No available ports"):
+                    await server.start()
+            finally:
+                set_config(original)
 
         assert server._server_task is None
         assert server._port is None
+        assert server._socket is None
+        assert module._port_generator.used_ports == set()
 
     async def test_server_can_start_after_a_failed_start(self):
         with pytest.raises(ServerStartupError):

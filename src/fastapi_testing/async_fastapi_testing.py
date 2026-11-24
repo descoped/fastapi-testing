@@ -147,7 +147,8 @@ class Config:
         return cls(**data)
 
 
-# Setting name -> type, from the Config constructor (see Config).
+# Setting name -> type, from the Config constructor (see Config). The annotations are not
+# checked statically; tests/test_config.py::TestSettingsSchema checks they are int or float.
 _SETTINGS: dict[str, type[int] | type[float]] = {
     name: parameter.annotation
     for name, parameter in inspect.signature(Config.__init__, eval_str=True).parameters.items()

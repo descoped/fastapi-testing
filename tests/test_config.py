@@ -361,7 +361,7 @@ class TestSettingsSchema:
         assert _SETTINGS, "no settings found in the Config signature"
         assert set(_SETTINGS.values()) <= {int, float}
 
-    def test_env_and_file_accept_exactly_the_constructor_parameters(self, tmp_path):
+    def test_env_and_file_accept_every_constructor_parameter(self, tmp_path):
         from fastapi_testing.async_fastapi_testing import _SETTINGS
 
         env = {f"FASTAPI_TESTING_{name.upper()}": "3" for name in _SETTINGS}

@@ -2,6 +2,7 @@
 
 import asyncio
 import signal
+import threading
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from types import FrameType
@@ -137,13 +138,51 @@ async def test_shutdown_error_still_raised_when_the_test_passed():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_of_the_test_is_not_replaced():
+@pytest.mark.parametrize("form", ["create_test_server", "AsyncTestServer"])
+async def test_cancellation_of_the_test_is_not_replaced(form: str):
+    in_body = asyncio.Event()
+
     async def body() -> None:
-        async with create_test_server(lifespan=_failing_shutdown_lifespan()):
+        lifespan = _failing_shutdown_lifespan()
+        manager = create_test_server(lifespan=lifespan) if form == "create_test_server" else AsyncTestServer(lifespan)
+        async with manager:
+            in_body.set()
             await asyncio.sleep(30)
 
     task = asyncio.create_task(body())
-    await asyncio.sleep(0.5)
+    # Cancel inside the body, not during start(), so the cleanup path is what is tested.
+    await asyncio.wait_for(in_body.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_server_context_manager_stops_cleanly_when_the_test_passed():
+    async with AsyncTestServer() as server:
+        port = server._port
+        assert port is not None
+    assert server._port is None
+    await server.stop()  # stopping again is harmless
+
+
+def test_server_in_a_worker_thread_leaves_the_signal_handlers_alone(recorded_signals: list[int]):
+    """Signals can only be handled in the main thread; a server elsewhere must still work."""
+    originals = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    seen: dict[str, object] = {}
+
+    async def run() -> None:
+        async with create_test_server() as server:
+
+            @server.app.get("/")
+            async def root():
+                return {"ok": True}
+
+            seen["status"] = (await server.client.get("/")).status_code
+            seen["handlers"] = {sig: signal.getsignal(sig) for sig in originals}
+
+    worker = threading.Thread(target=asyncio.run, args=(run(),))
+    worker.start()
+    worker.join(timeout=30)
+    assert not worker.is_alive()
+    assert seen == {"status": 200, "handlers": originals}

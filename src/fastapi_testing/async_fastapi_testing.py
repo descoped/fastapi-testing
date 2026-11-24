@@ -1047,7 +1047,8 @@ class AsyncTestServer:
             await self.stop()
         except ServerShutdownError as e:
             cause = e.__cause__
-            detail = f" (caused by {type(cause).__name__}: {cause})" if cause is not None and cause is not e else ""
+            # The message usually names the cause already; add it only when it does not.
+            detail = f" (caused by {type(cause).__name__}: {cause})" if cause and str(cause) not in str(e) else ""
             error.add_note(f"fastapi-testing: stopping the server also failed: {e}{detail}")
             logger.warning("Stopping the server failed after the test failed: %s", e, exc_info=e)
 

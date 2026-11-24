@@ -72,7 +72,8 @@ async def test_client_timeout_is_independent_of_startup_timeout():
 @pytest.mark.asyncio
 async def test_client_timeout_defaults_to_30_seconds_whatever_the_startup_timeout():
     async with create_test_server(startup_timeout=5.0) as server:
-        assert server.client._timeout == 30.0
+        # What httpx actually uses for every request.
+        assert server.client._client.timeout == httpx.Timeout(30.0)
 
 
 class TestFromEnvValidation:

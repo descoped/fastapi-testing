@@ -72,7 +72,8 @@ class Config:
         A variable with the prefix that names no setting (a typo) or holds a
         value of the wrong type is ignored and logged as a warning, and the
         default is used. With ``strict=True`` it raises instead, as
-        ``from_file()`` does.
+        ``from_file()`` does. Every variable starting with ``prefix`` is read as
+        a setting, so use a prefix that belongs to this library alone.
 
         Raises:
             ValueError: with ``strict=True``, unknown variables or invalid values.

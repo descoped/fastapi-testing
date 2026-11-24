@@ -578,6 +578,7 @@ class _LifespanRunner:
         self._startup_done = asyncio.Event()
         self._shutdown_done = asyncio.Event()
         self._failure: str | None = None
+        self.startup_completed = False
         self._receive_calls = 0
         self.unsupported = False
         self.task: asyncio.Task[None] | None = None
@@ -590,6 +591,8 @@ class _LifespanRunner:
         kind = message["type"]
         if kind in ("lifespan.startup.failed", "lifespan.shutdown.failed"):
             self._failure = message.get("message") or kind
+        elif kind == "lifespan.startup.complete":
+            self.startup_completed = True
         if kind.startswith("lifespan.startup."):
             self._startup_done.set()
         elif kind.startswith("lifespan.shutdown."):
@@ -599,6 +602,10 @@ class _LifespanRunner:
         scope: Scope = {"type": "lifespan", "asgi": {"version": "3.0", "spec_version": "2.0"}, "state": self.state}
         try:
             await self.app(scope, self._receive, self._send)
+            if self._receive_calls == 0:
+                # Returned without reading the startup message: the application
+                # ignores lifespan, which uvicorn accepts.
+                self.unsupported = True
         except Exception:
             if self._receive_calls == 0:
                 # Raised before reading the startup message: the application does
@@ -627,8 +634,9 @@ class _LifespanRunner:
             await asyncio.wait({self.task}, timeout=1.0)
             error = self.task.exception() if self.task.done() and not self.task.cancelled() else None
             if self._failure is None and error is None:
-                if phase == "shutdown":
-                    return  # The application returned after shutting down: fine.
+                if phase == "shutdown" or self.startup_completed:
+                    # Returning after completing the phase is allowed, as in uvicorn.
+                    return
                 raise RuntimeError(f"Application returned during {phase}")
             # An application that reported failure but kept running is not left behind.
             await self.cancel()
@@ -848,10 +856,16 @@ class AsyncTestServer:
                     await asyncio.wait({task}, timeout=2.0)
 
             if lifespan is not None:
-                try:
-                    await lifespan.shutdown(timeout=self.shutdown_timeout)
-                except (TimeoutError, RuntimeError) as e:
-                    shutdown_error = e
+                if lifespan.startup_completed:
+                    try:
+                        await lifespan.shutdown(timeout=self.shutdown_timeout)
+                    except (TimeoutError, RuntimeError) as e:
+                        shutdown_error = e
+                else:
+                    # Startup never completed (start() failed or was cancelled while it
+                    # ran), so there is nothing to shut down: an application still in
+                    # startup would never read the shutdown message.
+                    await lifespan.cancel()
             graceful = True
         finally:
             # Runs also when a step above failed or stop() was cancelled.

@@ -445,7 +445,6 @@ The framework provides clear error messages for common issues:
   raises `ServerStartupError` (a `RuntimeError`), chained to the original exception, and releases everything
 - Server shutdown failures: if the app's lifespan shutdown raises or hangs, `stop()` raises `ServerShutdownError`
   (a `RuntimeError`) after releasing everything, so the test that caused it fails
-- Port allocation failures
 - Connection errors
 - Invalid request formats
 

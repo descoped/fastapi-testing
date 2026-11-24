@@ -151,6 +151,55 @@ class TestOwnedLifespan:
         finally:
             await server.stop()
 
+    async def test_app_that_returns_for_lifespan_still_serves(self):
+        async def http_only(scope, receive, send):
+            if scope["type"] != "http":
+                return  # falls through for lifespan, as many raw ASGI apps do
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+            await send({"type": "http.response.body", "body": b"http only"})
+
+        server = AsyncTestServer()
+        server.app = http_only  # type: ignore[assignment]
+        await server.start()
+        try:
+            response = await server.client.get("/")
+            assert await response.text() == "http only"
+        finally:
+            await server.stop()
+
+    async def test_app_that_returns_after_startup_complete_still_serves(self):
+        async def startup_then_return(scope, receive, send):
+            if scope["type"] == "lifespan":
+                await receive()
+                await send({"type": "lifespan.startup.complete"})
+                return
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        server = AsyncTestServer()
+        server.app = startup_then_return  # type: ignore[assignment]
+        await server.start()
+        try:
+            await (await server.client.get("/")).expect_status(204)
+        finally:
+            await server.stop()
+
+    async def test_cancelled_start_during_slow_startup_returns_promptly(self):
+        @asynccontextmanager
+        async def slow_startup(app: FastAPI):
+            await asyncio.sleep(30)  # e.g. still connecting to a database
+            yield
+
+        before = _pending_tasks()
+        server = AsyncTestServer(lifespan=slow_startup, startup_timeout=60.0, shutdown_timeout=10.0)
+        began = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(server.start(), timeout=0.5)
+        # Not held for shutdown_timeout: an unfinished startup is cancelled, not shut down.
+        assert time.monotonic() - began < 3.0
+        assert _pending_tasks() - before == set()
+        assert module._port_generator.used_ports == set()
+
     async def test_hung_startup_leaves_no_task_behind(self):
         release = asyncio.Event()
 

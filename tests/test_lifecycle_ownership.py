@@ -167,6 +167,24 @@ class TestOwnedLifespan:
         finally:
             await server.stop()
 
+    async def test_app_that_reads_startup_then_returns_still_serves(self):
+        """uvicorn accepts an app that reads lifespan.startup and returns without replying."""
+
+        async def reads_then_returns(scope, receive, send):
+            if scope["type"] == "lifespan":
+                await receive()
+                return
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        server = AsyncTestServer()
+        server.app = reads_then_returns  # type: ignore[assignment]
+        await server.start()
+        try:
+            await (await server.client.get("/")).expect_status(204)
+        finally:
+            await server.stop()
+
     async def test_app_that_returns_after_startup_complete_still_serves(self):
         async def startup_then_return(scope, receive, send):
             if scope["type"] == "lifespan":

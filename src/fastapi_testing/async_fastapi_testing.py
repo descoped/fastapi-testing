@@ -200,6 +200,23 @@ class WebSocketConfig:
     timeout: float | None = None
 
 
+def _new_server_socket() -> socket.socket:
+    """A TCP socket configured the way the test server binds its listening socket.
+
+    On POSIX, ``SO_REUSEADDR`` lets a port from a recently closed connection
+    (TIME_WAIT) be reused where the OS permits it, and never allows binding a
+    port another socket is listening on. On Windows ``SO_REUSEADDR`` would
+    allow exactly that, so ``SO_EXCLUSIVEADDRUSE`` is used instead, as asyncio
+    does.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if os.name == "posix":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    elif hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    return sock
+
+
 class PortGenerator:
     """Manages port allocation for test servers.
 
@@ -224,12 +241,11 @@ class PortGenerator:
     def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
         """Whether ``bind()`` could bind ``port`` on ``host`` right now.
 
-        Uses the same socket options as ``bind()``, so a port another socket
-        holds counts as taken, while a port left in TIME_WAIT by a closed
-        connection (common for recently used ephemeral ports) does not.
+        Uses the same socket options as ``bind()``, so the two always agree: a
+        port another socket holds is taken, and a port in TIME_WAIT is free
+        exactly when the OS lets the server reuse it.
         """
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with _new_server_socket() as sock:
             try:
                 sock.bind((host, port))
                 return True
@@ -274,10 +290,7 @@ class PortGenerator:
             raise RuntimeError(f"No available ports in range {self.start}-{self.end}")
         random.shuffle(candidates)
         for port in candidates:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            # Lets a port from a just-finished test (in TIME_WAIT) be reused;
-            # it does not allow binding a port another socket is listening on.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock = _new_server_socket()
             try:
                 sock.bind((host, port))
                 sock.listen()
@@ -638,10 +651,11 @@ class _LifespanRunner:
             await asyncio.wait({self.task}, timeout=1.0)
             error = self.task.exception() if self.task.done() and not self.task.cancelled() else None
             if self._failure is None and error is None:
-                if phase == "shutdown" or self.startup_completed:
-                    # Returning after completing the phase is allowed, as in uvicorn.
-                    return
-                raise RuntimeError(f"Application returned during {phase}")
+                # The application returned without reporting failure: uvicorn accepts
+                # this in both phases (its lifespan task ends and serving goes on).
+                if phase == "startup" and not self.startup_completed:
+                    logger.debug("Application returned during lifespan startup without completing it")
+                return
             # An application that reported failure but kept running is not left behind.
             await self.cancel()
             # Prefer the exception itself: the failure message from Starlette is a full traceback.

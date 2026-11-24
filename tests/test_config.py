@@ -318,8 +318,10 @@ class TestPortGenerator:
             with pytest.raises(RuntimeError, match="No available ports found"):
                 generator.get_port()
 
-    def test_time_wait_port_counts_as_available(self):
-        """A port left in TIME_WAIT by a closed connection is free to bind (SO_REUSEADDR)."""
+    def test_is_port_available_agrees_with_bind_for_a_time_wait_port(self):
+        """Whether a TIME_WAIT port is reusable is OS-specific (macOS: yes; Linux: only
+        if the earlier socket also set SO_REUSEADDR). What must hold everywhere is
+        that the availability check and the real bind agree."""
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()
@@ -329,4 +331,14 @@ class TestPortGenerator:
                 client.connect(listener.getsockname())
                 accepted, _ = listener.accept()
             accepted.close()  # client closed first: its port is now in TIME_WAIT
-        assert PortGenerator.is_port_available(port)
+
+        available = PortGenerator.is_port_available(port)
+        generator = PortGenerator(start=port, end=port)
+        try:
+            sock = generator.bind("127.0.0.1")
+        except RuntimeError:
+            assert not available
+        else:
+            sock.close()
+            generator.release_port(port)
+            assert available

@@ -6,7 +6,7 @@ import os
 import random
 import socket
 import tomllib
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -321,6 +321,14 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError("WebSocket connections don't have headers")
         return self._response.headers
 
+    @property
+    def httpx_response(self) -> httpx.Response:
+        """The underlying ``httpx.Response`` (HTTP only), for anything this wrapper does not cover."""
+        if self._is_websocket:
+            raise InvalidResponseTypeError("This response is a WebSocket connection; use websocket() instead")
+        assert isinstance(self._response, httpx.Response)
+        return self._response
+
     def websocket(self) -> ClientConnection:
         """Get WebSocket connection (WebSocket only)."""
         if not self._is_websocket:
@@ -421,11 +429,19 @@ class WebSocketHelper:
 
 
 class AsyncTestClient:
-    """Async test client supporting both HTTP and WebSocket connections."""
+    """Async test client supporting both HTTP and WebSocket connections.
 
-    def __init__(self, base_url: str, timeout: float = 30.0, follow_redirects: bool = True):
+    ``async with client:`` closes the client on exit when ``close_on_exit`` is
+    true (the default for a client you create). The client an
+    ``AsyncTestServer`` provides is created with ``close_on_exit=False``: it is
+    shared for the server's lifetime and closed by ``stop()``, so
+    ``async with server.client as client:`` can be used any number of times.
+    """
+
+    def __init__(self, base_url: str, timeout: float = 30.0, follow_redirects: bool = True, close_on_exit: bool = True):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._close_on_exit = close_on_exit
         self._websocket_connections: set[ClientConnection] = set()
 
         limits = httpx.Limits(
@@ -459,6 +475,21 @@ class AsyncTestClient:
         """Make HTTP request."""
         response = await self._client.request(method, url, **kwargs)
         return AsyncTestResponse(response)
+
+    @asynccontextmanager
+    async def stream(self, method: str, url: str, **kwargs: Any) -> AsyncIterator[httpx.Response]:
+        """Make a streaming HTTP request, e.g. for Server-Sent Events.
+
+        Yields the ``httpx.Response`` before its body is read; iterate it with
+        ``aiter_lines()``, ``aiter_text()`` or ``aiter_bytes()``. The response is
+        closed when the block exits::
+
+            async with server.client.stream("GET", "/events") as response:
+                async for line in response.aiter_lines():
+                    ...
+        """
+        async with self._client.stream(method, url, **kwargs) as response:
+            yield response
 
     async def websocket(
         self, path: str, config: WebSocketConfig | None = None, options: dict[str, Any] | None = None
@@ -533,8 +564,9 @@ class AsyncTestClient:
     async def __aenter__(self) -> "AsyncTestClient":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._close_on_exit:
+            await self.close()
 
 
 class UvicornTestServer(uvicorn.Server):
@@ -783,7 +815,7 @@ class AsyncTestServer:
                     ) from error
                 raise ServerStartupError(f"Server startup timed out on host {self._host} and port {self._port}")
 
-            self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout)
+            self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout, close_on_exit=False)
         except BaseException:
             with suppress(Exception):
                 # stop() releases what was acquired; a lifespan shutdown error is

@@ -1,0 +1,124 @@
+name: PR review (Claude)
+
+# Automated PR review by claude[bot] when a PR is opened or reopened. The same
+# action answers `@claude` mentions in PR comments, review comments, reviews and
+# issues: in tag mode, it answers the mention rather than reviewing.
+#
+# `reopened` is the way to re-fire a review on an existing PR: the review
+# prompt is gated on the `pull_request` event, an `@claude` comment runs tag
+# mode, and re-running a finished run replays that run's own workflow file.
+# Deliberately NOT `synchronize`: that would review every push to every open PR.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request:
+    types: [opened, reopened]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+# A newer PR-opened trigger cancels a superseded review. Cancellation is scoped
+# to `pull_request`: the action's interim "Claude Code is working…" comment
+# fires `issue_comment` into this same group, and an unconditional cancel would
+# abort the very review that posted it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runs on every opened PR, Renovate's included, so its token has no write to
+  # the repository: a review reads the diff and posts a comment, nothing more.
+  review:
+    # Not actor-gated: the prompt is the fixed string below (PR text never
+    # becomes the instruction), and renovate[bot] opens PRs with
+    # author_association NONE, so a gate would end Renovate reviews.
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'claude[bot]'
+    runs-on: ubuntu-latest
+    # A review cut off by the timeout still reports success with a half-filled
+    # comment, so the ceiling is generous.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b  # v1 (v1.0.289)
+        with:
+          # The model is named, not inherited: the bundled Claude Code build can
+          # lag a new model id, and a model it cannot run ends the review at once.
+          # `Agent` is denied so the review is one pass: subagent passes still
+          # running when the main turn ends never report, and nothing posts.
+          # The read-only gh/git tools are granted because the action refuses
+          # every Bash call by default.
+          claude_args: >-
+            --model opus
+            --disallowedTools "Agent"
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+          # OAuth token from `claude setup-token` (Pro/Max subscription), not a
+          # Console API key. Set as an organization secret.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "Review this PR. fastapi-testing is a public, async-first integration testing library for FastAPI on PyPI: it runs a real uvicorn server on a free port and gives tests an httpx and websockets client. It supports every Python version in the pyproject.toml classifiers (3.11 and up; requires-python is the floor), so flag any syntax or API that does not exist on the floor version. Check correctness first: async lifecycle and cleanup on every path (startup failure, timeout, cancellation, stop() twice), leaked ports, tasks, httpx clients or WebSocket connections, swallowed CancelledError, and exception chaining. Then the public API: anything exported from src/fastapi_testing/__init__.py or documented in README.md must not change incompatibly without being called out, and README examples must match the code. Then type safety, tests (every fix needs a test that would fail without it), dependency changes in pyproject.toml and uv.lock (breaking changes in the upgraded packages, floors that match what the code uses), CI workflow changes, hardcoded values and leaked secrets, and AI attribution lines in commits or the PR body (none allowed). Distinguish CRITICAL (must fix before merge) from SUGGESTION (non-blocking). Post one concise PR review with file:line citations. If the PR is clean, say so plainly; do not manufacture issues. Complete the entire review within this run and post the consolidated review before ending; never end the turn while any review pass is deferred, backgrounded or promised for later."
+          track_progress: true
+          allowed_bots: 'renovate[bot]'
+
+      # The job succeeds even when the review never posted: the action edits one
+      # placeholder comment in place, and a run that ends early leaves its
+      # checklist unticked. An unticked box in that comment fails the job.
+      - name: Fail when the review did not post
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          body=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+            --jq '[.[] | select(.user.login == "claude[bot]")] | last | .body // ""')
+          if printf '%s' "$body" | grep -q -- '- \[ \]'; then
+            echo "::error::the review comment still has unchecked boxes; the review did not post"
+            exit 1
+          fi
+
+  respond:
+    # These arms run the triggering comment or issue text as Claude's
+    # instruction with a write-scoped token and the OAuth secret, so each
+    # requires the author to be a trusted member (OWNER, MEMBER, COLLABORATOR).
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && github.event.review.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && github.event.issue.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b  # v1 (v1.0.289)
+        with:
+          # Same model, tools and credential as the review job; with no prompt
+          # the action runs in tag mode and answers the mention.
+          claude_args: >-
+            --model opus
+            --disallowedTools "Agent"
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true

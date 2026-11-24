@@ -1,32 +1,19 @@
 name: PR review (Claude)
 
-# Automated PR review by claude[bot] when a PR is opened or reopened. The same
-# action answers `@claude` mentions in PR comments, review comments, reviews and
-# issues: in tag mode, it answers the mention rather than reviewing.
+# Automated PR review by claude[bot] when a PR is opened or reopened. Pull
+# requests are the only trigger: no `@claude` mentions, comments or issues.
 #
-# `reopened` is the way to re-fire a review on an existing PR: the review
-# prompt is gated on the `pull_request` event, an `@claude` comment runs tag
-# mode, and re-running a finished run replays that run's own workflow file.
+# `reopened` is the way to re-fire a review on an existing PR; re-running a
+# finished run replays that run's own workflow file.
 # Deliberately NOT `synchronize`: that would review every push to every open PR.
 on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
   pull_request:
     types: [opened, reopened]
-  issues:
-    types: [opened, assigned]
-  pull_request_review:
-    types: [submitted]
 
-# A newer PR-opened trigger cancels a superseded review. Cancellation is scoped
-# to `pull_request`: the action's interim "Claude Code is working…" comment
-# fires `issue_comment` into this same group, and an unconditional cancel would
-# abort the very review that posted it.
+# A newer trigger for the same PR cancels the superseded review.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   # Runs on every opened PR, Renovate's included, so its token has no write to
@@ -35,7 +22,7 @@ jobs:
     # Not actor-gated: the prompt is the fixed string below (PR text never
     # becomes the instruction), and renovate[bot] opens PRs with
     # author_association NONE, so a gate would end Renovate reviews.
-    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'claude[bot]'
+    if: github.event.pull_request.user.login != 'claude[bot]'
     runs-on: ubuntu-latest
     # A review cut off by the timeout still reports success with a half-filled
     # comment, so the ceiling is generous.
@@ -87,38 +74,3 @@ jobs:
             echo "::error::the review comment still has unchecked boxes; the review did not post"
             exit 1
           fi
-
-  respond:
-    # These arms run the triggering comment or issue text as Claude's
-    # instruction with a write-scoped token and the OAuth secret, so each
-    # requires the author to be a trusted member (OWNER, MEMBER, COLLABORATOR).
-    if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && github.event.review.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && github.event.issue.user.login != 'claude[bot]' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
-      actions: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 1
-
-      - name: Run Claude Code
-        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b  # v1 (v1.0.289)
-        with:
-          # Same model, tools and credential as the review job; with no prompt
-          # the action runs in tag mode and answers the mention.
-          claude_args: >-
-            --model opus
-            --disallowedTools "Agent"
-            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          track_progress: true

@@ -443,7 +443,9 @@ class AsyncTestClient:
     ``async with server.client as client:`` can be used any number of times.
     """
 
-    def __init__(self, base_url: str, timeout: float = 30.0, follow_redirects: bool = True, close_on_exit: bool = True):
+    def __init__(
+        self, base_url: str, timeout: float = 30.0, follow_redirects: bool = True, *, close_on_exit: bool = True
+    ):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._close_on_exit = close_on_exit

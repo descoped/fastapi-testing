@@ -25,6 +25,14 @@ class TestSharedClient:
             async with server.client as client:
                 await (await client.get("/ping")).expect_status(200)
 
+    async def test_stop_closes_the_shared_client(self):
+        async with create_test_server() as server:
+            shared = server.client
+            async with shared:
+                pass
+        with pytest.raises(RuntimeError):
+            await shared.get("/")
+
     async def test_own_client_closes_on_exit(self):
         async with create_test_server() as server:
             async with AsyncTestClient(server.base_url) as client:

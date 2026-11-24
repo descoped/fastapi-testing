@@ -166,7 +166,9 @@ async with server.client.stream("GET", "/events") as response:
 
 `server.client` is shared for the server's lifetime and closed by `stop()`. `async with server.client as client:`
 does not close it, so it can be used any number of times in a test. A client you create yourself,
-`async with AsyncTestClient(server.base_url) as client:`, is closed when the block exits.
+`async with AsyncTestClient(server.base_url) as client:`, is closed when the block exits. WebSocket connections opened
+through `server.client` likewise stay open until you close them or `stop()` runs; close one explicitly with
+`await ws_response.websocket().close()` when a test needs the server to see the disconnect.
 
 ### WebSocket Testing
 

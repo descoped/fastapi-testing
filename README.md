@@ -394,6 +394,12 @@ server = AsyncTestServer(
   that is done. If `stop()` is cancelled or a step fails, the remaining steps still run, without waiting, before the
   error propagates; on that path the lifespan is cancelled rather than shut down, so the code after its `yield` does
   not run.
+- **Errors from the test come first:** when the body of `async with create_test_server()` (or
+  `async with AsyncTestServer()`) raises, that exception is what the test reports. A `ServerShutdownError` from the
+  cleanup is attached to it as a note instead of replacing it, and a cancelled test stays cancelled.
+- **Signals:** while serving, SIGINT and SIGTERM stop the server, as in uvicorn. Overlapping servers share the
+  process handlers correctly whatever order they stop in, and the original handlers come back when the last
+  server stops, so Ctrl-C keeps interrupting the test run.
 
 ### Global settings
 
@@ -469,7 +475,8 @@ The framework provides clear error messages for common issues:
 - Server startup failures: if the app's lifespan startup raises, no port is free, or startup times out, `start()`
   raises `ServerStartupError` (a `RuntimeError`), chained to the original exception, and releases everything
 - Server shutdown failures: if the app's lifespan shutdown raises or hangs, `stop()` raises `ServerShutdownError`
-  (a `RuntimeError`) after releasing everything, so the test that caused it fails
+  (a `RuntimeError`) after releasing everything, so the test that caused it fails. If the test itself already
+  failed, its own exception is raised instead, with the shutdown error as a note
 - Connection errors
 - Invalid request formats
 

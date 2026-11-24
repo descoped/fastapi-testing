@@ -19,6 +19,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.13'
+  # uv follows .python-version unless told otherwise; the test job overrides
+  # this with its matrix version.
+  UV_PYTHON: '3.13'
   UV_VERSION: '0.13.9'
 
 jobs:
@@ -69,7 +72,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: test
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7

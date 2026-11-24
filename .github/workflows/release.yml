@@ -44,6 +44,8 @@ jobs:
 
     - name: Install uv
       uses: astral-sh/setup-uv@v10.4.0
+      with:
+        version: ${{ env.UV_VERSION }}
 
     - name: Verify version consistency
       run: |

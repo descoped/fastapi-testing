@@ -29,7 +29,7 @@ dependencies = [
     "fastapi>=0.165.0",
     "starlette>=1.10.0",
     "uvicorn>=0.54.0",
-    "httpx[http2]>=0.28.1",
+    "httpx>=0.28.1",
     "websockets>=17.4",
     "typing-extensions>=4.4.0 ; python_full_version < '3.12'",
 ]

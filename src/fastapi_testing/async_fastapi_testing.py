@@ -480,7 +480,7 @@ class AsyncTestClient:
             max_connections=global_config.HTTP_MAX_CONNECTIONS,
         )
         self._client = httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout, follow_redirects=follow_redirects, limits=limits, http2=True
+            base_url=self._base_url, timeout=timeout, follow_redirects=follow_redirects, limits=limits
         )
 
         self.ws = WebSocketHelper()

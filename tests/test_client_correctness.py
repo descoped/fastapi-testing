@@ -179,3 +179,16 @@ def test_websocket_url_maps_only_the_scheme(base_url: str, expected: str):
 def test_websocket_url_rejects_other_schemes(base_url: str):
     with pytest.raises(ValueError, match="Invalid base URL"):
         AsyncTestClient(base_url)._websocket_url("/ws")
+
+
+@pytest.mark.asyncio
+async def test_client_speaks_http1():
+    """uvicorn serves HTTP/1.1, so the client needs no HTTP/2 support (the h2 package)."""
+    async with create_test_server() as server:
+
+        @server.app.get("/")
+        async def root():
+            return {}
+
+        response = await server.client.get("/")
+        assert response.httpx_response.http_version == "HTTP/1.1"

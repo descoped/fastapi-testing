@@ -8,9 +8,8 @@ on:
       - '**'
     paths-ignore:
       - '**.md'
+  # Every PR, including stacked PRs whose base is another PR's branch.
   pull_request:
-    branches:
-      - master
     paths-ignore:
       - '**.md'
 

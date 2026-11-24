@@ -18,6 +18,7 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Lifespan, Message, Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection, connect
+from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
 if sys.version_info >= (3, 12):
@@ -354,8 +355,13 @@ class AsyncTestResponse:
 
     async def expect_status(self, status_code: int) -> "AsyncTestResponse":
         """Assert expected status code (HTTP only)."""
-        actual = self._http("WebSocket connections don't have status codes").status_code
-        assert actual == status_code, f"Expected status {status_code}, got {actual}"
+        response = self._http("WebSocket connections don't have status codes")
+        if response.status_code != status_code:
+            # An explicit raise, not `assert`, so the check also runs under `python -O`.
+            body = response.text
+            if len(body) > 500:
+                body = body[:500] + "..."
+            raise AssertionError(f"Expected status {status_code}, got {response.status_code}: {body}")
         return self
 
 
@@ -416,8 +422,7 @@ class WebSocketHelper:
         try:
             message = await asyncio.wait_for(ws.recv(), timeout)
         except TimeoutError as e:
-            logger.error("Timed out waiting for message")
-            raise e
+            raise TimeoutError(f"No WebSocket message received within {timeout} s") from e
 
         if isinstance(expected, dict):
             if not isinstance(message, str):
@@ -429,15 +434,20 @@ class WebSocketHelper:
                 raise AssertionError(f"Expected message {expected}, got {message}")
 
     @staticmethod
-    async def drain_messages(resp: AsyncTestResponse, timeout: float | None = 0.1) -> list[Any]:
-        """Drain all pending messages from websocket queue."""
+    async def drain_messages(resp: AsyncTestResponse, timeout: float = 0.1) -> list[Any]:
+        """Receive messages until none arrives within ``timeout`` seconds or the connection closes.
+
+        Returns the messages received. A connection closed by the server ends the
+        drain, it does not lose what was already received.
+        """
+        if timeout is None:
+            raise ValueError("drain_messages() needs a timeout; without one it would wait forever")
         ws = resp.websocket()
-        messages = []
+        messages: list[Any] = []
         try:
             while True:
-                message = await asyncio.wait_for(ws.recv(), timeout)
-                messages.append(message)
-        except TimeoutError:
+                messages.append(await asyncio.wait_for(ws.recv(), timeout))
+        except (TimeoutError, ConnectionClosed):
             pass
         return messages
 
@@ -481,7 +491,7 @@ class AsyncTestClient:
                     await ws.close()
                     self._websocket_connections.discard(ws)
             except Exception as e:
-                logger.warning(f"Error closing websocket connection: {e}")
+                logger.warning("Error closing websocket connection: %s", e)
         self._websocket_connections.clear()
 
         if self._client:
@@ -507,18 +517,22 @@ class AsyncTestClient:
         async with self._client.stream(method, url, **kwargs) as response:
             yield response
 
+    def _websocket_url(self, path: str) -> str:
+        """The ws:// or wss:// URL for ``path`` on this client's base URL."""
+        scheme, separator, rest = self._base_url.partition("://")
+        if not separator or scheme not in ("http", "https"):
+            raise ValueError("Invalid base URL. Must start with 'http://' or 'https://'")
+        return f"{'wss' if scheme == 'https' else 'ws'}://{rest}{path}"
+
     async def websocket(
         self, path: str, config: WebSocketConfig | None = None, options: dict[str, Any] | None = None
     ) -> AsyncTestResponse:
-        """Create a websocket connection with configuration."""
-        if not (self._base_url.startswith("http://") or self._base_url.startswith("https://")):
-            raise ValueError("Invalid base URL. Must start with 'http://' or 'https://'")
-        if self._base_url.startswith("https://"):
-            ws_url = f"wss://{self._base_url.replace('https://', '')}{path}"
-        elif self._base_url.startswith("http://"):
-            ws_url = f"ws://{self._base_url.replace('http://', '')}{path}"
-        else:
-            ws_url = f"ws://{self._base_url}{path}"
+        """Create a websocket connection with configuration.
+
+        Connection errors (refused, timed out) are retried ``WS_RETRY_ATTEMPTS``
+        times; a rejected handshake (for example 403 or 404) fails at once.
+        """
+        ws_url = self._websocket_url(path)
 
         connect_kwargs: dict[str, Any] = {
             "open_timeout": self._timeout,
@@ -543,21 +557,20 @@ class AsyncTestClient:
         if options:
             connect_kwargs.update(options)
 
-        # Retry logic for establishing a WebSocket connection.
-        attempt = 0
+        # Retry only what can be transient: the server not accepting yet, or a
+        # timeout. A rejected handshake (InvalidStatus) or a bad URI is final.
+        attempts = max(global_config.WS_RETRY_ATTEMPTS, 1)
+        attempt = 1
         while True:
             try:
                 ws = await connect(ws_url, **connect_kwargs)
                 break
-            except Exception as e:
-                attempt += 1
-                if attempt >= global_config.WS_RETRY_ATTEMPTS:
-                    logger.error(
-                        f"Failed to establish WebSocket connection after "
-                        f"{global_config.WS_RETRY_ATTEMPTS} attempts: {e}"
-                    )
+            except (OSError, TimeoutError) as e:
+                logger.debug("WebSocket connection attempt %d/%d to %s failed: %s", attempt, attempts, ws_url, e)
+                if attempt >= attempts:
                     raise
-                await asyncio.sleep(global_config.WS_RETRY_DELAY)
+            attempt += 1
+            await asyncio.sleep(global_config.WS_RETRY_DELAY)
 
         self._websocket_connections.add(ws)
         return AsyncTestResponse(ws)

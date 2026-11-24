@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -41,8 +42,13 @@ DEFAULT_WS_RETRY_DELAY = 1.0
 
 
 class Config:
-    """
-    Global configuration settings for fastapi-testing framework.
+    """Global configuration settings for fastapi-testing.
+
+    The constructor is the single definition of the settings: ``from_env()``
+    and ``from_file()`` take their names and types from its signature, and
+    each parameter is stored as the attribute of the same name in upper case
+    (``ws_retry_delay`` -> ``WS_RETRY_DELAY``). A new setting is a new
+    parameter plus its attribute; a test checks that the two match.
     """
 
     def __init__(
@@ -84,18 +90,14 @@ class Config:
             if not env_key.startswith(prefix):
                 continue
             config_key = env_key[len(prefix) :].lower()
-            if config_key in _INT_SETTINGS:
-                convert: type[int] | type[float] = int
-            elif config_key in _FLOAT_SETTINGS:
-                convert = float
-            else:
+            kind = _SETTINGS.get(config_key)
+            if kind is None:
                 problems.append(f"{env_key}: unknown setting")
                 continue
             try:
-                config_params[config_key] = convert(env_value)
+                config_params[config_key] = kind(env_value)
             except ValueError:
-                kind = "an integer" if convert is int else "a number"
-                problems.append(f"{env_key}: must be {kind}, got {env_value!r}")
+                problems.append(f"{env_key}: must be {_describe(kind)}, got {env_value!r}")
 
         if problems:
             if strict:
@@ -131,31 +133,32 @@ class Config:
         if not isinstance(data, dict):
             raise ValueError(f"{path}: expected an object of settings, got {type(data).__name__}")
 
-        unknown = set(data) - _INT_SETTINGS - _FLOAT_SETTINGS
+        unknown = set(data) - set(_SETTINGS)
         if unknown:
             raise ValueError(f"{path}: unknown setting(s): {', '.join(sorted(unknown))}")
 
         for key, value in data.items():
-            expected = int if key in _INT_SETTINGS else (int, float)
-            if isinstance(value, bool) or not isinstance(value, expected):
-                kind = "an integer" if key in _INT_SETTINGS else "a number"
-                raise ValueError(f"{path}: {key!r} must be {kind}, got {value!r}")
+            kind = _SETTINGS[key]
+            # An integer is accepted for a float setting; a bool is not a number here.
+            accepted = (int, float) if kind is float else kind
+            if isinstance(value, bool) or not isinstance(value, accepted):
+                raise ValueError(f"{path}: {key!r} must be {_describe(kind)}, got {value!r}")
 
         return cls(**data)
 
 
-_INT_SETTINGS = frozenset(
-    {
-        "ws_max_message_size",
-        "ws_max_queue_size",
-        "http_max_keepalive",
-        "http_max_connections",
-        "ws_retry_attempts",
-        "port_range_start",
-        "port_range_end",
-    }
-)
-_FLOAT_SETTINGS = frozenset({"ws_retry_delay"})
+# Setting name -> type, from the Config constructor (see Config). The annotations are not
+# checked statically; tests/test_config.py::TestSettingsSchema checks they are int or float.
+_SETTINGS: dict[str, type[int] | type[float]] = {
+    name: parameter.annotation
+    for name, parameter in inspect.signature(Config.__init__, eval_str=True).parameters.items()
+    if name != "self"
+}
+
+
+def _describe(kind: type) -> str:
+    return "an integer" if kind is int else "a number"
+
 
 # The active configuration. Replace it with set_config(); assigning to an
 # imported name (``from fastapi_testing import global_config``) only rebinds

@@ -22,7 +22,7 @@ from websockets.protocol import State
 
 if sys.version_info >= (3, 12):
     from typing import override
-else:
+else:  # pragma: no cover - Python 3.11 only; coverage is uploaded from the 3.13 job
     from typing_extensions import override
 
 logger = logging.getLogger(__name__)

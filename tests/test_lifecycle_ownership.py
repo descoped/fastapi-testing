@@ -143,7 +143,7 @@ class TestOwnedLifespan:
             await send({"type": "http.response.body", "body": b"bare"})
 
         server = AsyncTestServer()
-        server.app = bare_asgi  # type: ignore[assignment]
+        server.app = bare_asgi  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         await server.start()
         try:
             response = await server.client.get("/")
@@ -159,7 +159,7 @@ class TestOwnedLifespan:
             await send({"type": "http.response.body", "body": b"http only"})
 
         server = AsyncTestServer()
-        server.app = http_only  # type: ignore[assignment]
+        server.app = http_only  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         await server.start()
         try:
             response = await server.client.get("/")
@@ -178,7 +178,7 @@ class TestOwnedLifespan:
             await send({"type": "http.response.body", "body": b""})
 
         server = AsyncTestServer()
-        server.app = reads_then_returns  # type: ignore[assignment]
+        server.app = reads_then_returns  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         await server.start()
         try:
             await (await server.client.get("/")).expect_status(204)
@@ -195,7 +195,7 @@ class TestOwnedLifespan:
             await send({"type": "http.response.body", "body": b""})
 
         server = AsyncTestServer()
-        server.app = startup_then_return  # type: ignore[assignment]
+        server.app = startup_then_return  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         await server.start()
         try:
             await (await server.client.get("/")).expect_status(204)
@@ -318,6 +318,7 @@ class TestShutdown:
                 return StreamingResponse(events(), media_type="text/event-stream")
 
             port = server._port
+            assert port is not None
             received = asyncio.Event()
 
             async def consume():
@@ -361,7 +362,7 @@ class TestShutdown:
         await asyncio.sleep(0)  # let the cancelled serve task finish unwinding
         assert serve_task.done()
         # The closed socket is no longer registered with the event loop.
-        assert fd not in asyncio.get_running_loop()._selector.get_map()  # type: ignore[attr-defined]
+        assert fd not in asyncio.get_running_loop()._selector.get_map()  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[missing-attribute]  # selector loop internals
         assert _port_refuses_connections(port)
         assert port not in module._port_generator.used_ports
 
@@ -392,7 +393,7 @@ class TestNonConformingLifespan:
 
         before = _pending_tasks()
         server = AsyncTestServer(startup_timeout=10.0, shutdown_timeout=10.0)
-        server.app = stubborn  # type: ignore[assignment]
+        server.app = stubborn  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         began = time.monotonic()
         with pytest.raises(ServerStartupError, match="nope"):
             await server.start()
@@ -416,7 +417,7 @@ class TestNonConformingLifespan:
 
         monkeypatch.setattr(module._LifespanRunner, "cancel_timeout", 0.2)
         server = AsyncTestServer(shutdown_timeout=0.5)
-        server.app = ignores_cancel  # type: ignore[assignment]
+        server.app = ignores_cancel  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[invalid-assignment]  # a bare ASGI app on purpose
         await server.start()
         began = time.monotonic()
         with pytest.raises(ServerShutdownError, match="did not complete"):

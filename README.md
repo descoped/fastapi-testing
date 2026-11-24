@@ -272,7 +272,9 @@ ws_response = await server.client.websocket("/ws", options={"ping_interval": Non
 
 ### Advanced Server Configuration
 
-You can customize the server lifecycle using a reusable test fixture:
+You can customize the server lifecycle using a reusable test fixture. The lifespan is an
+`@asynccontextmanager` function, the form Starlette's `Lifespan` type describes, so type checkers
+accept it:
 
 ```python
 @pytest.fixture
@@ -281,7 +283,8 @@ async def test_server(
 ) -> AsyncGenerator[AsyncTestServer, None]:
     """Create test server with overridden settings and database connection"""
 
-    async def custom_lifespan(app: AppType) -> AsyncGenerator[None, Any]:
+    @asynccontextmanager
+    async def custom_lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Wire up test-specific dependencies
         app.dependency_overrides.update(
             {

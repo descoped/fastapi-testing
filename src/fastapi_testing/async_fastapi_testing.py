@@ -5,8 +5,9 @@ import math
 import os
 import random
 import socket
+import sys
 import tomllib
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +16,14 @@ from typing import Any
 import httpx
 import uvicorn
 from fastapi import FastAPI
-from fastapi.applications import AppType
 from starlette.types import ASGIApp, Lifespan, Message, Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.protocol import State
+
+if sys.version_info >= (3, 12):
+    from typing import override
+else:  # pragma: no cover - Python 3.11 only; coverage is uploaded from the 3.13 job
+    from typing_extensions import override
 
 logger = logging.getLogger(__name__)
 
@@ -311,59 +316,46 @@ class AsyncTestResponse:
 
     def __init__(self, response: httpx.Response | ClientConnection):
         self._response = response
-        self._is_websocket = isinstance(response, ClientConnection)
+
+    def _http(self, message: str) -> httpx.Response:
+        """The wrapped HTTP response; raises InvalidResponseTypeError with ``message`` for a WebSocket."""
+        if isinstance(self._response, ClientConnection):
+            raise InvalidResponseTypeError(message)
+        return self._response
 
     async def json(self) -> Any:
         """Get JSON response (HTTP only)."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError(
-                "Cannot get JSON directly from WebSocket response. Use websocket() methods instead."
-            )
-        return self._response.json()
+        return self._http("Cannot get JSON directly from WebSocket response. Use websocket() methods instead.").json()
 
     async def text(self) -> str:
         """Get text response (HTTP only)."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError(
-                "Cannot get text directly from WebSocket response. Use websocket() methods instead."
-            )
-        return self._response.text
+        return self._http("Cannot get text directly from WebSocket response. Use websocket() methods instead.").text
 
     @property
     def status_code(self) -> int:
         """Get status code (HTTP only)."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError("WebSocket connections don't have status codes")
-        return self._response.status_code
+        return self._http("WebSocket connections don't have status codes").status_code
 
     @property
     def headers(self) -> httpx.Headers:
         """Get response headers (HTTP only)."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError("WebSocket connections don't have headers")
-        return self._response.headers
+        return self._http("WebSocket connections don't have headers").headers
 
     @property
     def httpx_response(self) -> httpx.Response:
         """The underlying ``httpx.Response`` (HTTP only), for anything this wrapper does not cover."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError("This response is a WebSocket connection; use websocket() instead")
-        assert isinstance(self._response, httpx.Response)
-        return self._response
+        return self._http("This response is a WebSocket connection; use websocket() instead")
 
     def websocket(self) -> ClientConnection:
         """Get WebSocket connection (WebSocket only)."""
-        if not self._is_websocket:
+        if not isinstance(self._response, ClientConnection):
             raise InvalidResponseTypeError("This response is not a WebSocket connection")
         return self._response
 
     async def expect_status(self, status_code: int) -> "AsyncTestResponse":
         """Assert expected status code (HTTP only)."""
-        if self._is_websocket:
-            raise InvalidResponseTypeError("WebSocket connections don't have status codes")
-        assert self._response.status_code == status_code, (
-            f"Expected status {status_code}, got {self._response.status_code}"
-        )
+        actual = self._http("WebSocket connections don't have status codes").status_code
+        assert actual == status_code, f"Expected status {status_code}, got {actual}"
         return self
 
 
@@ -417,7 +409,7 @@ class WebSocketHelper:
 
     @staticmethod
     async def expect_message(
-        resp: AsyncTestResponse, expected: str | dict | bytes, timeout: float | None = None
+        resp: AsyncTestResponse, expected: str | dict[str, Any] | bytes, timeout: float | None = None
     ) -> None:
         """Assert expected message is received within timeout."""
         ws = resp.websocket()
@@ -501,7 +493,7 @@ class AsyncTestClient:
         return AsyncTestResponse(response)
 
     @asynccontextmanager
-    async def stream(self, method: str, url: str, **kwargs: Any) -> AsyncIterator[httpx.Response]:
+    async def stream(self, method: str, url: str, **kwargs: Any) -> AsyncGenerator[httpx.Response]:
         """Make a streaming HTTP request, e.g. for Server-Sent Events.
 
         Yields the ``httpx.Response`` before its body is read; iterate it with
@@ -600,7 +592,8 @@ class UvicornTestServer(uvicorn.Server):
         super().__init__(config)
         self.startup_handler = startup_handler
 
-    async def startup(self, sockets: list | None = None) -> None:
+    @override
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
         """Override startup to signal when ready.
 
         Readiness is not signalled when uvicorn's own startup gave up and is
@@ -752,14 +745,14 @@ class AsyncTestServer:
 
     def __init__(
         self,
-        lifespan: Lifespan[AppType] | None = None,
+        lifespan: Lifespan[FastAPI] | None = None,
         startup_timeout: float = 30.0,
         shutdown_timeout: float = 10.0,
     ):
         self.app = FastAPI(lifespan=lifespan)
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
-        self._server_task: asyncio.Task | None = None
+        self._server_task: asyncio.Task[None] | None = None
         self._port: int | None = None
         self._host = "127.0.0.1"
         self._client: AsyncTestClient | None = None
@@ -972,7 +965,7 @@ class AsyncTestServer:
 
 @asynccontextmanager
 async def create_test_server(
-    lifespan: Lifespan[AppType] | None = None,
+    lifespan: Lifespan[FastAPI] | None = None,
     startup_timeout: float = 30.0,
     shutdown_timeout: float = 10.0,
 ) -> AsyncGenerator[AsyncTestServer, None]:

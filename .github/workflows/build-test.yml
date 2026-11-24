@@ -54,6 +54,16 @@ jobs:
       run: |
         uv sync --all-groups --locked
     
+    - name: Lint and type check
+      # ruff's target-version and [tool.pyright]/[tool.ty] pin the checks to the 3.11
+      # floor, so one run suffices. tests/typing holds assert_type checks for the public API.
+      if: matrix.python-version == env.PYTHON_VERSION
+      run: |
+        uv run ruff check .
+        uv run ruff format --check .
+        uv run ty check --output-format github
+        npx --yes pyright@1.1.414
+
     - name: Run tests with coverage
       env:
         FASTAPI_TESTING_PORT_RANGE_START: 8001
@@ -90,3 +100,9 @@ jobs:
     - name: Build package
       run: |
         uv build
+
+    - name: Verify package
+      run: |
+        uv run --no-project python -m zipfile -l dist/*.whl
+        # PEP 561: without py.typed, type checkers ignore the package's annotations
+        uv run --no-project python -m zipfile -l dist/*.whl | grep -q 'fastapi_testing/py.typed'

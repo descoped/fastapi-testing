@@ -31,6 +31,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "httpx[http2]>=0.28.1",
     "websockets>=17.4",
+    "typing-extensions>=4.4.0 ; python_full_version < '3.12'",
 ]
 
 [dependency-groups]
@@ -42,6 +43,7 @@ dev = [
     "ruff>=0.17.6",
     "restructuredtext-lint>=2.0.2",
     "pygments>=2.21.0",
+    "ty>=0.0.109",
 ]
 
 [build-system]
@@ -86,6 +88,50 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+# Used by the pyright language server (editors) and the `pyright` CLI. uv creates the
+# project environment as `.venv` next to this file; pyright does not find it on its own.
+venvPath = "."
+venv = ".venv"
+# Same scope as ty ([tool.ty.src]) and the CI gate.
+include = ["src", "tests"]
+# Check against the lowest supported Python so newer-only syntax is caught.
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+# Every `pyright: ignore[...]` must still be needed, like ty's unused-ignore-comment.
+reportUnnecessaryTypeIgnoreComment = "error"
+
+[tool.ty]
+# Astral's type checker: `uv run ty check` (a dev dependency, so the version is locked and
+# Renovate tracks it). Defaults that already fit and are therefore not set here:
+# - Python version: the minimum of project.requires-python (3.11).
+# - Environment: VIRTUAL_ENV under `uv run`, else `.venv` next to this file.
+# - First-party code: `src/` is found automatically.
+# - Any diagnostic, warnings included, fails the run (terminal.error-on-warning = true).
+#
+# This is a published library with a typed API (py.typed), so it is checked strictly.
+# Suppress a single line with `# ty: ignore[<rule>]` and a comment saying why; never a bare
+# `ty: ignore`.
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.analysis]
+# Only `ty: ignore` silences ty; `type: ignore[...]` comments must not hide ty diagnostics.
+respect-type-ignore-comments = false
+# Infer return types of unannotated functions (fixtures, test helpers) instead of treating
+# them as Unknown, so their callers are checked too.
+return-type-inference = "always"
+
+[tool.ty.rules]
+# Opt-in rules that hold for this code base. tests/typing marks errors that MUST occur with
+# ty: ignore comments, so an unused one fails.
+unused-ignore-comment = "error"
+possibly-unresolved-reference = "error"
+unsound-return = "error"
+# Not redundant-condition-strict: it reports `graceful` in AsyncTestServer.stop()'s `finally`
+# as always true, but a cancelled stop() reaches that block with it still False.
 
 [tool.ruff]
 target-version = "py311"

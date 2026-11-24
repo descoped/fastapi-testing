@@ -1,7 +1,10 @@
+import json
 import os
 
 import pytest
 
+import fastapi_testing.async_fastapi_testing
+from fastapi_testing import create_test_server, get_config, set_config
 from fastapi_testing.async_fastapi_testing import Config, PortGenerator
 
 
@@ -138,10 +141,87 @@ class TestConfig:
             for key, value in env_backup.items():
                 os.environ[key] = value
 
-    def test_config_from_file(self):
-        """Test Config.from_file() method (currently a placeholder)"""
-        result = Config.from_file("dummy.json")
-        assert result is None  # Current implementation just passes
+    def test_config_from_json_file(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"ws_max_message_size": 4096, "ws_retry_delay": 0.5, "port_range_start": 9100}))
+        config = Config.from_file(path)
+        assert config.WS_MAX_MESSAGE_SIZE == 4096
+        assert config.WS_RETRY_DELAY == 0.5
+        assert config.PORT_RANGE_START == 9100
+        assert config.HTTP_MAX_CONNECTIONS == 100  # untouched default
+
+    def test_config_from_toml_file(self, tmp_path):
+        path = tmp_path / "config.toml"
+        path.write_text("http_max_connections = 7\nws_retry_delay = 2\n")
+        config = Config.from_file(str(path))
+        assert config.HTTP_MAX_CONNECTIONS == 7
+        assert config.WS_RETRY_DELAY == 2  # an integer is accepted for a float setting
+
+    def test_config_from_pyproject_tool_table(self, tmp_path):
+        path = tmp_path / "pyproject.toml"
+        path.write_text('[project]\nname = "x"\n\n[tool.fastapi-testing]\nws_retry_attempts = 9\n')
+        assert Config.from_file(path).WS_RETRY_ATTEMPTS == 9
+
+    def test_config_from_pyproject_without_tool_table_uses_defaults(self, tmp_path):
+        path = tmp_path / "pyproject.toml"
+        path.write_text('[project]\nname = "x"\n\n[tool.ruff]\nline-length = 120\n')
+        assert Config.from_file(path).WS_RETRY_ATTEMPTS == 3
+
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            ('{"no_such_setting": 1}', "unknown setting"),
+            ('{"ws_retry_attempts": "5"}', "must be an integer"),
+            ('{"ws_retry_attempts": true}', "must be an integer"),
+            ('{"ws_retry_attempts": 1.5}', "must be an integer"),
+            ('{"ws_retry_delay": "fast"}', "must be a number"),
+            ("[1, 2]", "expected an object"),
+        ],
+    )
+    def test_config_from_file_rejects_invalid_content(self, tmp_path, content, message):
+        path = tmp_path / "config.json"
+        path.write_text(content)
+        with pytest.raises(ValueError, match=message):
+            Config.from_file(path)
+
+    def test_config_from_file_rejects_unsupported_type(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        path.write_text("ws_retry_attempts: 5\n")
+        with pytest.raises(ValueError, match="Unsupported config file type"):
+            Config.from_file(path)
+
+
+class TestSetConfig:
+    """set_config() must reach every part of the library, not only new imports."""
+
+    @pytest.fixture(autouse=True)
+    def restore_config(self):
+        original = get_config()
+        yield
+        set_config(original)
+
+    def test_set_config_replaces_active_config(self):
+        config = Config(ws_retry_attempts=7)
+        set_config(config)
+        assert get_config() is config
+        assert fastapi_testing.async_fastapi_testing.global_config is config
+
+    def test_default_port_generator_follows_set_config(self):
+        generator = PortGenerator()
+        set_config(Config(port_range_start=65520, port_range_end=65522))
+        assert (generator.start, generator.end) == (65520, 65522)
+        assert 65520 <= generator.get_port() <= 65522
+
+    def test_explicit_port_range_ignores_set_config(self):
+        generator = PortGenerator(start=65510, end=65511)
+        set_config(Config(port_range_start=65520, port_range_end=65522))
+        assert (generator.start, generator.end) == (65510, 65511)
+
+    async def test_server_uses_port_range_from_set_config(self):
+        set_config(Config(port_range_start=65400, port_range_end=65420))
+        async with create_test_server() as server:
+            port = int(server.base_url.rsplit(":", 1)[1])
+            assert 65400 <= port <= 65420
 
 
 class TestPortGenerator:

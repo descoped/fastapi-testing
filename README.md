@@ -239,6 +239,13 @@ ws_config = WebSocketConfig(
 )
 ```
 
+A field left as `None` uses the default: `max_size` and `max_queue` come from the active `Config`, everything else
+from websockets. To pass `None` itself to websockets, for example to disable keepalive pings, use `options`:
+
+```python
+ws_response = await server.client.websocket("/ws", options={"ping_interval": None})
+```
+
 ## Advanced Usage
 
 ### Advanced Server Configuration
@@ -342,6 +349,33 @@ server = AsyncTestServer(
 )
 ```
 
+### Global settings
+
+Port range, HTTP connection limits, WebSocket limits and connection retries are set with a `Config`. Activate it
+with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards:
+
+```python
+from fastapi_testing import Config, set_config
+
+set_config(Config(port_range_start=9000, port_range_end=9500, ws_retry_attempts=5))
+
+# or read FASTAPI_TESTING_* environment variables, e.g. FASTAPI_TESTING_PORT_RANGE_START=9000
+set_config(Config.from_env())
+
+# or load a JSON or TOML file; pyproject.toml is read from its [tool.fastapi-testing] table
+set_config(Config.from_file("pyproject.toml"))
+```
+
+```toml
+[tool.fastapi-testing]
+port_range_start = 9000
+port_range_end = 9500
+ws_max_message_size = 2097152
+```
+
+`get_config()` returns the active configuration. Assigning to an imported `global_config` name has no effect on the
+library; use `set_config()` instead.
+
 ## Best Practices
 
 1. Always use the async context manager (`create_test_server`) when possible
@@ -386,6 +420,9 @@ All tests follow modern async/await patterns and avoid mocks to ensure real-worl
 
 The framework provides clear error messages for common issues:
 
+- Server startup failures: if the app's lifespan startup raises, the port cannot be bound, or startup times out,
+  `start()` raises `ServerStartupError` (a `RuntimeError`) and releases the port, instead of uvicorn exiting the
+  test process
 - Server startup timeout
 - Port allocation failures
 - Connection errors

@@ -2,9 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import tomllib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -52,7 +54,7 @@ class Config:
         self.PORT_RANGE_END = port_range_end
 
     @classmethod
-    def from_env(cls, prefix: str = "FASTAPI_TESTING_"):
+    def from_env(cls, prefix: str = "FASTAPI_TESTING_") -> "Config":
         """
         Create configuration from environment variables.
         This is an explicit opt-in method.
@@ -61,48 +63,99 @@ class Config:
         env_vars = {k: v for k, v in os.environ.items() if k.startswith(prefix)}
 
         # Convert to expected parameter names
-        config_params = {}
+        config_params: dict[str, Any] = {}
         for env_key, env_value in env_vars.items():
             config_key = env_key[len(prefix) :].lower()
             # Handle type conversion
-            if config_key in [
-                "ws_max_message_size",
-                "ws_max_queue_size",
-                "http_max_keepalive",
-                "http_max_connections",
-                "ws_retry_attempts",
-                "port_range_start",
-                "port_range_end",
-            ]:
+            if config_key in _INT_SETTINGS:
                 with suppress(ValueError):
                     config_params[config_key] = int(env_value)
-            elif config_key == "ws_retry_delay":
+            elif config_key in _FLOAT_SETTINGS:
                 with suppress(ValueError):
                     config_params[config_key] = float(env_value)
 
         return cls(**config_params)
 
     @classmethod
-    def from_file(cls, file_path: str):
-        """Load configuration from a file."""
-        # Implementation for loading from a file (JSON, YAML, etc.)
-        pass
+    def from_file(cls, file_path: str | os.PathLike[str]) -> "Config":
+        """Load configuration from a JSON or TOML file.
+
+        Keys are the ``Config`` parameter names, e.g. ``ws_max_message_size``.
+        In a TOML file that has a ``[tool]`` table, such as ``pyproject.toml``,
+        settings are read from ``[tool.fastapi-testing]``; if that table is
+        absent, the defaults are used.
+
+        Raises:
+            ValueError: unsupported file type, unknown keys or wrongly typed values.
+        """
+        path = Path(file_path)
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            data = json.loads(path.read_text(encoding="utf-8"))
+        elif suffix == ".toml":
+            with path.open("rb") as f:
+                data = tomllib.load(f)
+            if "tool" in data:
+                data = data["tool"].get("fastapi-testing", {})
+        else:
+            raise ValueError(f"Unsupported config file type {path.suffix!r}; use .json or .toml")
+
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: expected an object of settings, got {type(data).__name__}")
+
+        unknown = set(data) - _INT_SETTINGS - _FLOAT_SETTINGS
+        if unknown:
+            raise ValueError(f"{path}: unknown setting(s): {', '.join(sorted(unknown))}")
+
+        for key, value in data.items():
+            expected = int if key in _INT_SETTINGS else (int, float)
+            if isinstance(value, bool) or not isinstance(value, expected):
+                kind = "an integer" if key in _INT_SETTINGS else "a number"
+                raise ValueError(f"{path}: {key!r} must be {kind}, got {value!r}")
+
+        return cls(**data)
 
 
-# Create the global configuration with defaults
+_INT_SETTINGS = frozenset(
+    {
+        "ws_max_message_size",
+        "ws_max_queue_size",
+        "http_max_keepalive",
+        "http_max_connections",
+        "ws_retry_attempts",
+        "port_range_start",
+        "port_range_end",
+    }
+)
+_FLOAT_SETTINGS = frozenset({"ws_retry_delay"})
+
+# The active configuration. Replace it with set_config(); assigning to an
+# imported name (``from fastapi_testing import global_config``) only rebinds
+# that local name and is not seen by the library.
 global_config = Config()
 
 
-# Users can override it with their own configuration:
-# global_config = Config.from_env()
-# or
-# global_config = Config(ws_max_message_size=2**21, http_max_connections=200)
+def get_config() -> Config:
+    """Return the active configuration."""
+    return global_config
+
+
+def set_config(config: Config) -> None:
+    """Replace the active configuration.
+
+    Takes effect for everything created or connected afterwards: port
+    allocation, HTTP client limits, WebSocket defaults and retry behaviour.
+    """
+    global global_config
+    global_config = config
 
 
 class InvalidResponseTypeError(Exception):
     """Exception raised when an operation is not supported for the response type."""
 
-    pass
+
+class ServerStartupError(RuntimeError):
+    """Raised when the test server fails to start or does not start in time."""
 
 
 @dataclass
@@ -118,6 +171,12 @@ class WebSocketConfig:
         max_size: Maximum message size in bytes
         max_queue: Maximum number of queued messages
         timeout: Connection timeout in seconds
+
+    A field left as ``None`` uses the library default (``max_size`` and
+    ``max_queue`` come from the active ``Config`` at connect time). To pass
+    ``None`` through to websockets, e.g. ``ping_interval=None`` to disable
+    keepalive pings, use the ``options`` argument of
+    ``AsyncTestClient.websocket()``.
     """
 
     subprotocols: list[str] | None = None
@@ -125,22 +184,30 @@ class WebSocketConfig:
     extra_headers: dict[str, str] | None = None
     ping_interval: float | None = None
     ping_timeout: float | None = None
-    max_size: int = global_config.WS_MAX_MESSAGE_SIZE
-    max_queue: int = global_config.WS_MAX_QUEUE_SIZE
+    max_size: int | None = None
+    max_queue: int | None = None
     timeout: float | None = None
 
 
 class PortGenerator:
-    """Manages port allocation for test servers using configuration from global settings."""
+    """Manages port allocation for test servers.
+
+    A range bound left as ``None`` is read from the active ``Config`` each
+    time a port is requested.
+    """
 
     def __init__(self, start: int | None = None, end: int | None = None):
-        if start is None:
-            start = global_config.PORT_RANGE_START
-        if end is None:
-            end = global_config.PORT_RANGE_END
-        self.start = start
-        self.end = end
+        self._start = start
+        self._end = end
         self.used_ports: set[int] = set()
+
+    @property
+    def start(self) -> int:
+        return global_config.PORT_RANGE_START if self._start is None else self._start
+
+    @property
+    def end(self) -> int:
+        return global_config.PORT_RANGE_END if self._end is None else self._end
 
     @staticmethod
     def is_port_available(port: int) -> bool:
@@ -192,7 +259,7 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError(
                 "Cannot get JSON directly from WebSocket response. Use websocket() methods instead."
             )
-        return await asyncio.to_thread(self._response.json)
+        return self._response.json()
 
     async def text(self) -> str:
         """Get text response (HTTP only)."""
@@ -200,7 +267,7 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError(
                 "Cannot get text directly from WebSocket response. Use websocket() methods instead."
             )
-        return await asyncio.to_thread(lambda: self._response.text)
+        return self._response.text
 
     @property
     def status_code(self) -> int:
@@ -375,18 +442,18 @@ class AsyncTestClient:
         }
 
         if config:
-            if config.subprotocols:
-                connect_kwargs["subprotocols"] = config.subprotocols
-            if config.compression:
-                connect_kwargs["compression"] = config.compression
-            if config.extra_headers:
-                connect_kwargs["additional_headers"] = config.extra_headers
-            if config.ping_interval:
-                connect_kwargs["ping_interval"] = config.ping_interval
-            if config.ping_timeout:
-                connect_kwargs["ping_timeout"] = config.ping_timeout
-            if config.timeout:
-                connect_kwargs["open_timeout"] = config.timeout
+            # None means "not set"; any other value, including 0, is passed through.
+            settings = {
+                "subprotocols": config.subprotocols,
+                "compression": config.compression,
+                "additional_headers": config.extra_headers,
+                "ping_interval": config.ping_interval,
+                "ping_timeout": config.ping_timeout,
+                "max_size": config.max_size,
+                "max_queue": config.max_queue,
+                "open_timeout": config.timeout,
+            }
+            connect_kwargs.update({key: value for key, value in settings.items() if value is not None})
 
         if options:
             connect_kwargs.update(options)
@@ -461,17 +528,33 @@ class AsyncTestServer:
         self.app = FastAPI(lifespan=lifespan)
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
-        self._startup_complete = asyncio.Event()
-        self._shutdown_complete = asyncio.Event()
         self._server_task: asyncio.Task | None = None
         self._port: int | None = None
         self._host = "127.0.0.1"
         self._client: AsyncTestClient | None = None
         self._server: UvicornTestServer | None = None
-        self._websocket_tasks: set[asyncio.Task] = set()
+
+    async def _serve(self) -> None:
+        """Run uvicorn, turning its ``sys.exit()`` on startup failure into an exception.
+
+        uvicorn exits the process when binding or lifespan startup fails. A
+        ``SystemExit`` escaping an asyncio task stops the whole event loop, so
+        it is converted here and reported by ``start()`` instead.
+        """
+        assert self._server is not None
+        try:
+            await self._server.serve()
+        except SystemExit as e:
+            raise ServerStartupError(
+                f"Server failed to start on host {self._host} and port {self._port} (uvicorn exit code {e.code})"
+            ) from e
 
     async def start(self) -> None:
-        """Start the server asynchronously with proper lifecycle management."""
+        """Start the server asynchronously with proper lifecycle management.
+
+        Raises:
+            ServerStartupError: uvicorn failed to start, or did not start in time.
+        """
         if self._server_task is not None:
             raise RuntimeError("Server is already running")
 
@@ -482,33 +565,31 @@ class AsyncTestServer:
 
         self._server = UvicornTestServer(config=config, startup_handler=startup_handler)
 
-        self._server_task = asyncio.create_task(self._server.serve())
+        self._server_task = asyncio.create_task(self._serve())
+        started = asyncio.create_task(startup_handler.wait())
 
         try:
-            await asyncio.wait_for(startup_handler.wait(), timeout=self.startup_timeout)
+            done, _ = await asyncio.wait(
+                {self._server_task, started}, timeout=self.startup_timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if started not in done:
+                if self._server_task in done:
+                    # The task can only end this early by failing; re-raise its error.
+                    self._server_task.result()
+                    raise ServerStartupError(f"Server exited during startup on host {self._host} and port {self._port}")
+                raise ServerStartupError(f"Server startup timed out on host {self._host} and port {self._port}")
 
             self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout)
-
-            self._startup_complete.set()
-
-        except (TimeoutError, Exception) as e:
+        except BaseException:
+            started.cancel()
             await self.stop()
-            if isinstance(e, asyncio.TimeoutError):
-                raise RuntimeError(f"Server startup timed out on host {self._host} and port {self._port}") from e
             raise
 
     async def stop(self) -> None:
-        """Stop the server and clean up all resources including WebSocket connections."""
-        if not self._startup_complete.is_set():
-            return
+        """Stop the server and clean up all resources including WebSocket connections.
 
-        # Cancel all WebSocket tasks
-        for task in self._websocket_tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*self._websocket_tasks, return_exceptions=True)
-        self._websocket_tasks.clear()
-
+        Safe to call more than once, and after a failed ``start()``.
+        """
         if self._client:
             await self._client.close()
             self._client = None
@@ -527,14 +608,16 @@ class AsyncTestServer:
                     await asyncio.gather(self._server_task, return_exceptions=True)
             except asyncio.CancelledError:
                 logger.info("Server task cancelled successfully")
+            except Exception:
+                # A failed startup is reported by start(); anything else is not actionable here.
+                logger.debug("Server task ended with an error", exc_info=True)
             finally:
                 self._server_task = None
+                self._server = None
 
         if self._port:
             _port_generator.release_port(self._port)
             self._port = None
-
-        self._shutdown_complete.set()
 
     @property
     def base_url(self) -> str:

@@ -5,11 +5,14 @@ from fastapi_testing.async_fastapi_testing import (
     Config,
     InvalidResponseTypeError,
     PortGenerator,
+    ServerStartupError,
     UvicornTestServer,
     WebSocketConfig,
     WebSocketHelper,
     create_test_server,
+    get_config,
     global_config,
+    set_config,
 )
 
 __all__ = [
@@ -19,9 +22,12 @@ __all__ = [
     "Config",
     "InvalidResponseTypeError",
     "PortGenerator",
+    "ServerStartupError",
     "UvicornTestServer",
     "WebSocketConfig",
     "WebSocketHelper",
     "create_test_server",
+    "get_config",
     "global_config",
+    "set_config",
 ]

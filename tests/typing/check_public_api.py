@@ -31,6 +31,21 @@ from fastapi_testing import (
 )
 
 
+class MyServer(AsyncTestServer):
+    """A project's own server class, e.g. a fixture helper."""
+
+    def seed(self) -> int:
+        return 1
+
+
+class MyClient(AsyncTestClient):
+    pass
+
+
+class MyResponse(AsyncTestResponse):
+    pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield
@@ -45,6 +60,13 @@ async def server_types() -> None:
 
     async with AsyncTestServer() as server:
         assert_type(server, AsyncTestServer)
+
+    # A subclass keeps its own type, and its methods, inside `async with`
+    async with MyServer() as own:
+        assert_type(own, MyServer)
+        assert_type(own.seed(), int)
+    async with MyClient("http://127.0.0.1:8001") as own_client:
+        assert_type(own_client, MyClient)
 
     async with create_test_server(app=FastAPI(), client_timeout=5.0) as server:
         assert_type(server.app, FastAPI)
@@ -79,11 +101,21 @@ async def client_types(client: AsyncTestClient) -> None:
     await response.expect_status("200")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]
 
 
+async def response_subclass_types(response: MyResponse) -> None:
+    assert_type(await response.expect_status(200), MyResponse)
+
+
 def config_types() -> None:
     assert_type(get_config(), Config)
     assert_type(global_config, Config)
     assert_type(Config.from_env(), Config)
     assert_type(Config.from_file("settings.toml"), Config)
+
+    class MyConfig(Config):
+        pass
+
+    assert_type(MyConfig.from_env(), MyConfig)
+    assert_type(MyConfig.from_file("settings.toml"), MyConfig)
 
     ports = PortGenerator()
     assert_type(ports.get_port(), int)

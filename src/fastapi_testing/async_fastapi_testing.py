@@ -15,8 +15,8 @@ from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from types import FrameType
-from typing import Any
+from types import FrameType, TracebackType
+from typing import Any, Self
 
 import httpx
 import uvicorn
@@ -89,7 +89,7 @@ class Config:
         self.PORT_RANGE_END = port_range_end
 
     @classmethod
-    def from_env(cls, prefix: str = "FASTAPI_TESTING_", *, strict: bool = False) -> "Config":
+    def from_env(cls, prefix: str = "FASTAPI_TESTING_", *, strict: bool = False) -> Self:
         """Create configuration from environment variables, e.g. ``FASTAPI_TESTING_PORT_RANGE_START``.
 
         A variable with the prefix that names no setting (a typo) or holds a
@@ -140,7 +140,7 @@ class Config:
         return cls(**config_params)
 
     @classmethod
-    def from_file(cls, file_path: str | os.PathLike[str]) -> "Config":
+    def from_file(cls, file_path: str | os.PathLike[str]) -> Self:
         """Load configuration from a JSON or TOML file.
 
         Keys are the ``Config`` parameter names, e.g. ``ws_max_message_size``.
@@ -445,7 +445,7 @@ class AsyncTestResponse:
             raise InvalidResponseTypeError("This response is not a WebSocket connection")
         return self._response
 
-    async def expect_status(self, status_code: int) -> "AsyncTestResponse":
+    async def expect_status(self, status_code: int) -> Self:
         """Assert expected status code (HTTP only)."""
         response = self._http("WebSocket connections don't have status codes")
         if response.status_code != status_code:
@@ -693,10 +693,12 @@ class AsyncTestClient:
     async def patch(self, url: str, **kwargs: Any) -> AsyncTestResponse:
         return await self.request("PATCH", url, **kwargs)
 
-    async def __aenter__(self) -> "AsyncTestClient":
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
         if self._close_on_exit:
             await self.close()
 
@@ -1159,11 +1161,13 @@ class AsyncTestServer:
             raise RuntimeError("Server is not running")
         return f"http://{self._host}:{self._port}"
 
-    async def __aenter__(self) -> "AsyncTestServer":
+    async def __aenter__(self) -> Self:
         await self.start()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
         await self._stop_after(exc_val)
 
     async def _stop_after(self, error: BaseException | None) -> None:

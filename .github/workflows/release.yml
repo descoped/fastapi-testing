@@ -6,7 +6,9 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  UV_VERSION: '0.11.13'
+  # uv follows .python-version (the local dev pin) unless told otherwise.
+  UV_PYTHON: '3.11'
+  UV_VERSION: '0.13.9'
 
 jobs:
   validate-release:
@@ -42,10 +44,12 @@ jobs:
 
     - name: Install uv
       uses: astral-sh/setup-uv@v10.4.0
+      with:
+        version: ${{ env.UV_VERSION }}
 
     - name: Verify version consistency
       run: |
-        PYPROJECT_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        PYPROJECT_VERSION=$(uv run --locked python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
         TAG_VERSION="${{ steps.extract-version.outputs.version }}"
         
         if [[ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]]; then
@@ -79,7 +83,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --all-groups
+        uv sync --all-groups --locked
 
     - name: Run tests
       env:

@@ -124,6 +124,34 @@ async with create_test_server() as server:
     pass  # Server automatically starts and stops
 ```
 
+### Testing Your Own Application
+
+Pass the application your project builds; its own lifespan runs, and its routes are served:
+
+```python
+from myproject.main import create_app
+
+async with create_test_server(app=create_app()) as server:
+    response = await server.client.get("/health")
+    await response.expect_status(200)
+```
+
+`app` and `lifespan` are alternatives: `lifespan` is for the empty `FastAPI` app the server creates when no `app` is
+given, so passing both raises `ValueError`.
+
+### Timeouts
+
+| Parameter | Default | Bounds |
+|---|---|---|
+| `startup_timeout` | 30 s | the application's lifespan startup and the server's own startup, together |
+| `shutdown_timeout` | 10 s | open connections finishing on stop, then the lifespan shutdown |
+| `client_timeout` | 30 s | each request with `server.client`, and opening its WebSocket connections |
+
+```python
+async with create_test_server(startup_timeout=60.0, client_timeout=5.0) as server:
+    ...
+```
+
 ### AsyncTestClient
 
 The `AsyncTestClient` provides methods for making HTTP requests to your test server:
@@ -384,7 +412,8 @@ server = AsyncTestServer(
   other process can take the port between choosing and binding it. `stop()` always closes it.
 - **Lifespan:** the application's lifespan runs in a task the server owns, through the full ASGI application (so
   middleware sees it). State yielded by the lifespan reaches `request.state` and `websocket.state`. You can assign
-  `server.app = create_app()` before `start()`; its lifespan is the one that runs.
+  `create_test_server(app=create_app())`, or assign `server.app = create_app()` before `start()`; its lifespan is the
+  one that runs.
 - **Startup:** lifespan startup runs first, then the server starts serving. If either fails or takes longer than
   `startup_timeout`, `start()` releases everything acquired so far and raises `ServerStartupError`, chained to the
   application's own exception.
@@ -413,8 +442,9 @@ from fastapi_testing import Config, set_config
 
 set_config(Config(port_range_start=9000, port_range_end=9500, ws_retry_attempts=5))
 
-# or read FASTAPI_TESTING_* environment variables, e.g. FASTAPI_TESTING_PORT_RANGE_START=9000
-set_config(Config.from_env())
+# or read FASTAPI_TESTING_* environment variables, e.g. FASTAPI_TESTING_PORT_RANGE_START=9000.
+# Unknown names and invalid values are ignored with a warning; strict=True raises ValueError instead.
+set_config(Config.from_env(strict=True))
 
 # or load a JSON or TOML file; pyproject.toml is read from its [tool.fastapi-testing] table
 set_config(Config.from_file("pyproject.toml"))

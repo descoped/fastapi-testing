@@ -507,9 +507,14 @@ class UvicornTestServer(uvicorn.Server):
         self.startup_handler = startup_handler
 
     async def startup(self, sockets: list | None = None) -> None:
-        """Override startup to signal when ready."""
+        """Override startup to signal when ready.
+
+        Readiness is not signalled when uvicorn's own startup gave up and is
+        exiting; ``AsyncTestServer.start()`` then sees the server task end.
+        """
         await super().startup(sockets=sockets)
-        self.startup_handler.set()
+        if not self.should_exit:
+            self.startup_handler.set()
 
 
 # Use the configurable PortGenerator instance
@@ -574,50 +579,65 @@ class AsyncTestServer:
             )
             if started not in done:
                 if self._server_task in done:
-                    # The task can only end this early by failing; re-raise its error.
-                    self._server_task.result()
-                    raise ServerStartupError(f"Server exited during startup on host {self._host} and port {self._port}")
+                    error = self._server_task.exception()
+                    if isinstance(error, ServerStartupError):
+                        raise error
+                    raise ServerStartupError(
+                        f"Server exited during startup on host {self._host} and port {self._port}"
+                    ) from error
                 raise ServerStartupError(f"Server startup timed out on host {self._host} and port {self._port}")
 
             self._client = AsyncTestClient(base_url=self.base_url, timeout=self.startup_timeout)
         except BaseException:
             started.cancel()
+            # Startup never completed, so uvicorn cannot shut down gracefully
+            # (it does not check should_exit while lifespan startup runs).
+            # Cancel it outright instead of waiting shutdown_timeout for nothing.
+            if self._server_task is not None and not self._server_task.done():
+                self._server_task.cancel()
             await self.stop()
             raise
 
     async def stop(self) -> None:
         """Stop the server and clean up all resources including WebSocket connections.
 
-        Safe to call more than once, and after a failed ``start()``.
+        Safe to call more than once, and after a failed ``start()``. If the
+        task calling ``stop()`` is cancelled, the cancellation propagates after
+        the port has been released.
         """
-        if self._client:
-            await self._client.close()
-            self._client = None
+        try:
+            if self._client:
+                await self._client.close()
+                self._client = None
 
-        if self._server_task:
-            try:
-                if self._server:
-                    self._server.should_exit = True
+            if self._server_task:
+                task = self._server_task
+                try:
+                    if self._server:
+                        self._server.should_exit = True
 
-                await asyncio.wait_for(self._server_task, timeout=self.shutdown_timeout)
+                    await asyncio.wait_for(task, timeout=self.shutdown_timeout)
 
-            except TimeoutError:
-                logger.error(f"Timeout waiting for server shutdown on host {self._host} port {self._port}")
-                if not self._server_task.done():
-                    self._server_task.cancel()
-                    await asyncio.gather(self._server_task, return_exceptions=True)
-            except asyncio.CancelledError:
-                logger.info("Server task cancelled successfully")
-            except Exception:
-                # A failed startup is reported by start(); anything else is not actionable here.
-                logger.debug("Server task ended with an error", exc_info=True)
-            finally:
-                self._server_task = None
-                self._server = None
-
-        if self._port:
-            _port_generator.release_port(self._port)
-            self._port = None
+                except TimeoutError:
+                    logger.error("Timeout waiting for server shutdown on host %s port %s", self._host, self._port)
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise  # The caller of stop() is being cancelled: never swallow that.
+                    logger.debug("Server task was cancelled")
+                except Exception:
+                    # A failed startup is reported by start(); anything else is not actionable here.
+                    logger.debug("Server task ended with an error", exc_info=True)
+                finally:
+                    self._server_task = None
+                    self._server = None
+        finally:
+            if self._port:
+                _port_generator.release_port(self._port)
+                self._port = None
 
     @property
     def base_url(self) -> str:

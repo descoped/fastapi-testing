@@ -1,6 +1,8 @@
 """Startup failure handling and WebSocketConfig pass-through."""
 
+import asyncio
 import socket
+import time
 from contextlib import asynccontextmanager, suppress
 
 import pytest
@@ -8,6 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosedError
 from websockets.protocol import State
 
+import fastapi_testing
 import fastapi_testing.async_fastapi_testing as module
 from fastapi_testing import (
     AsyncTestServer,
@@ -67,6 +70,65 @@ class TestStartupFailure:
 
             response = await server.client.get("/ok")
             await response.expect_status(200)
+
+    async def test_hung_lifespan_times_out_quickly_and_cleans_up(self):
+        release = asyncio.Event()
+
+        @asynccontextmanager
+        async def hung_lifespan(app: FastAPI):
+            await release.wait()
+            yield
+
+        server = AsyncTestServer(lifespan=hung_lifespan, startup_timeout=0.5, shutdown_timeout=10.0)
+        began = time.monotonic()
+        try:
+            with pytest.raises(ServerStartupError, match="timed out"):
+                await server.start()
+            # Startup never completed, so stop() must not wait shutdown_timeout on top.
+            assert time.monotonic() - began < 3.0
+            assert server._server_task is None
+            assert server._port is None
+            assert module._port_generator.used_ports == set()
+        finally:
+            release.set()
+
+    async def test_unexpected_serve_error_is_wrapped(self, monkeypatch):
+        async def broken_serve(self, sockets=None):
+            raise OSError("socket exploded")
+
+        monkeypatch.setattr(module.UvicornTestServer, "serve", broken_serve)
+        server = AsyncTestServer(startup_timeout=5.0)
+        with pytest.raises(ServerStartupError, match="exited during startup") as excinfo:
+            await server.start()
+        assert isinstance(excinfo.value.__cause__, OSError)
+        assert server._port is None
+
+    async def test_startup_that_gives_up_is_not_reported_ready(self, monkeypatch):
+        async def giving_up_startup(self, sockets=None):
+            self.should_exit = True  # uvicorn abandoning startup without sys.exit()
+
+        monkeypatch.setattr(module.uvicorn.Server, "startup", giving_up_startup)
+        server = AsyncTestServer(startup_timeout=5.0)
+        with pytest.raises(ServerStartupError, match="exited during startup"):
+            await server.start()
+        assert server._client is None
+        assert server._port is None
+
+    async def test_cancelling_stop_propagates_and_releases_port(self):
+        @asynccontextmanager
+        async def slow_shutdown(app: FastAPI):
+            yield
+            await asyncio.sleep(5)
+
+        server = AsyncTestServer(lifespan=slow_shutdown, shutdown_timeout=10.0)
+        await server.start()
+        stopping = asyncio.create_task(server.stop())
+        await asyncio.sleep(0.2)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert server._port is None
+        assert server._server_task is None
 
     async def test_startup_error_is_a_runtime_error(self):
         # Existing callers catching RuntimeError keep working.
@@ -147,3 +209,21 @@ class TestWebSocketConfigReal:
 
             default_response = await server.client.websocket("/ws", WebSocketConfig(ping_interval=5.0))
             assert default_response.websocket().ping_interval == 5.0
+
+
+class TestPackageGlobalConfig:
+    def test_package_global_config_follows_set_config(self):
+        original = get_config()
+        try:
+            replacement = Config(ws_retry_attempts=11)
+            set_config(replacement)
+            assert fastapi_testing.global_config is replacement
+            from fastapi_testing import global_config
+
+            assert global_config is replacement
+        finally:
+            set_config(original)
+
+    def test_unknown_package_attribute_raises(self):
+        with pytest.raises(AttributeError, match="no_such_name"):
+            _ = fastapi_testing.no_such_name

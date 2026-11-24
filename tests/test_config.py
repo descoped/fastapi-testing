@@ -145,7 +145,11 @@ class TestConfig:
 
     def test_config_from_json_file(self, tmp_path):
         path = tmp_path / "config.json"
-        path.write_text(json.dumps({"ws_max_message_size": 4096, "ws_retry_delay": 0.5, "port_range_start": 9100}))
+        path.write_text(
+            json.dumps(
+                {"ws_max_message_size": 4096, "ws_retry_delay": 0.5, "port_range_start": 9100, "port_range_end": 9200}
+            )
+        )
         config = Config.from_file(path)
         assert config.WS_MAX_MESSAGE_SIZE == 4096
         assert config.WS_RETRY_DELAY == 0.5
@@ -372,3 +376,49 @@ class TestSettingsSchema:
         from_file = Config.from_file(path)
         for name in _SETTINGS:
             assert getattr(from_env, name.upper()) == getattr(from_file, name.upper()) == 3
+
+
+class TestSettingRanges:
+    """Invalid values fail when the config is made, not later as a hang or an odd error."""
+
+    @pytest.mark.parametrize(
+        ("settings", "message"),
+        [
+            ({"ws_retry_delay": float("inf")}, "ws_retry_delay must be a finite number"),
+            ({"ws_retry_delay": -1.0}, "ws_retry_delay must be at least 0"),
+            ({"ws_retry_attempts": 0}, "ws_retry_attempts must be at least 1"),
+            ({"ws_max_message_size": -1}, "ws_max_message_size must be at least 1"),
+            ({"http_max_connections": 0}, "http_max_connections must be at least 1"),
+            ({"port_range_start": 0}, "port_range_start must be a port number from 1 to 65535"),
+            ({"port_range_end": 70000}, "port_range_end must be a port number from 1 to 65535"),
+            ({"port_range_start": 9100}, r"port_range_start \(9100\) is above port_range_end \(9000\)"),
+        ],
+    )
+    def test_constructor_rejects(self, settings, message):
+        with pytest.raises(ValueError, match=message):
+            Config(**settings)
+
+    def test_edge_values_are_accepted(self):
+        config = Config(
+            http_max_keepalive=0, ws_retry_delay=0, ws_retry_attempts=1, port_range_start=1, port_range_end=1
+        )
+        assert (config.HTTP_MAX_KEEPALIVE, config.WS_RETRY_DELAY, config.PORT_RANGE_END) == (0, 0, 1)
+
+    def test_from_file_names_the_file_and_setting(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text('{"ws_retry_delay": Infinity}')
+        with pytest.raises(ValueError, match=r"settings.json: 'ws_retry_delay' must be a finite number"):
+            Config.from_file(path)
+
+    def test_from_env_strict_rejects_out_of_range(self):
+        env = {"FASTAPI_TESTING_WS_RETRY_DELAY": "inf", "FASTAPI_TESTING_WS_RETRY_ATTEMPTS": "0"}
+        with patch.dict("os.environ", env, clear=True), pytest.raises(ValueError) as info:
+            Config.from_env(strict=True)
+        assert "FASTAPI_TESTING_WS_RETRY_DELAY: must be a finite number, got 'inf'" in str(info.value)
+        assert "FASTAPI_TESTING_WS_RETRY_ATTEMPTS: must be at least 1, got '0'" in str(info.value)
+
+    def test_from_env_ignores_out_of_range_with_a_warning(self, caplog):
+        with patch.dict("os.environ", {"FASTAPI_TESTING_WS_RETRY_DELAY": "-2"}, clear=True):
+            config = Config.from_env()
+        assert config.WS_RETRY_DELAY == 1.0  # the default
+        assert any("must be at least 0" in r.getMessage() for r in caplog.records)

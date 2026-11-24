@@ -7,6 +7,7 @@ import os
 import random
 import signal
 import socket
+import ssl
 import sys
 import threading
 import tomllib
@@ -62,6 +63,21 @@ class Config:
         port_range_start: int = 8001,
         port_range_end: int = 9000,
     ):
+        for name, value in (
+            ("ws_max_message_size", ws_max_message_size),
+            ("ws_max_queue_size", ws_max_queue_size),
+            ("http_max_keepalive", http_max_keepalive),
+            ("http_max_connections", http_max_connections),
+            ("ws_retry_attempts", ws_retry_attempts),
+            ("ws_retry_delay", ws_retry_delay),
+            ("port_range_start", port_range_start),
+            ("port_range_end", port_range_end),
+        ):
+            problem = _out_of_range(name, value)
+            if problem:
+                raise ValueError(f"{name} {problem}, got {value!r}")
+        if port_range_start > port_range_end:
+            raise ValueError(f"port_range_start ({port_range_start}) is above port_range_end ({port_range_end})")
         self.WS_MAX_MESSAGE_SIZE = ws_max_message_size
         self.WS_MAX_QUEUE_SIZE = ws_max_queue_size
         self.HTTP_MAX_KEEPALIVE = http_max_keepalive
@@ -95,9 +111,15 @@ class Config:
                 problems.append(f"{env_key}: unknown setting")
                 continue
             try:
-                config_params[config_key] = kind(env_value)
+                value = kind(env_value)
             except ValueError:
                 problems.append(f"{env_key}: must be {_describe(kind)}, got {env_value!r}")
+                continue
+            out_of_range = _out_of_range(config_key, value)
+            if out_of_range:
+                problems.append(f"{env_key}: {out_of_range}, got {env_value!r}")
+                continue
+            config_params[config_key] = value
 
         if problems:
             if strict:
@@ -143,6 +165,9 @@ class Config:
             accepted = (int, float) if kind is float else kind
             if isinstance(value, bool) or not isinstance(value, accepted):
                 raise ValueError(f"{path}: {key!r} must be {_describe(kind)}, got {value!r}")
+            out_of_range = _out_of_range(key, value)
+            if out_of_range:
+                raise ValueError(f"{path}: {key!r} {out_of_range}, got {value!r}")
 
         return cls(**data)
 
@@ -158,6 +183,20 @@ _SETTINGS: dict[str, type[int] | type[float]] = {
 
 def _describe(kind: type) -> str:
     return "an integer" if kind is int else "a number"
+
+
+# The lowest value each setting accepts; ports also have an upper bound.
+_MINIMUMS: dict[str, float] = {"http_max_keepalive": 0, "ws_retry_delay": 0}
+
+
+def _out_of_range(name: str, value: float) -> str | None:
+    """Why ``value`` is not acceptable for setting ``name``, or None when it is."""
+    if name.startswith("port_range_"):
+        return None if 1 <= value <= 65535 else "must be a port number from 1 to 65535"
+    if not math.isfinite(value):
+        return "must be a finite number"
+    minimum = _MINIMUMS.get(name, 1)
+    return None if value >= minimum else f"must be at least {minimum:g}"
 
 
 # The active configuration. Replace it with set_config(); assigning to an
@@ -546,6 +585,8 @@ class AsyncTestClient:
         scheme, separator, rest = self._base_url.partition("://")
         if not separator or scheme not in ("http", "https"):
             raise ValueError("Invalid base URL. Must start with 'http://' or 'https://'")
+        if not path.startswith("/"):
+            path = "/" + path  # as httpx joins a relative path to the base URL
         return f"{'wss' if scheme == 'https' else 'ws'}://{rest}{path}"
 
     async def websocket(
@@ -585,12 +626,14 @@ class AsyncTestClient:
         # Retry only what can be transient: the server not accepting yet, closing
         # the connection before answering (InvalidMessage), or a timeout. A
         # rejected handshake (InvalidStatus) or a bad URI is final.
-        attempts = max(global_config.WS_RETRY_ATTEMPTS, 1)
+        attempts = global_config.WS_RETRY_ATTEMPTS
         attempt = 1
         while True:
             try:
                 ws = await connect(ws_url, **connect_kwargs)
                 break
+            except ssl.SSLError:
+                raise  # a certificate or TLS failure is an OSError, but never transient
             except (OSError, TimeoutError, InvalidMessage) as e:
                 logger.debug("WebSocket connection attempt %d/%d to %s failed: %s", attempt, attempts, ws_url, e)
                 if attempt >= attempts:
@@ -598,6 +641,9 @@ class AsyncTestClient:
             attempt += 1
             await asyncio.sleep(global_config.WS_RETRY_DELAY)
 
+        # Forget connections that have closed since, so a client shared for a
+        # whole test session does not keep every connection it ever opened.
+        self._websocket_connections = {c for c in self._websocket_connections if c.state is not State.CLOSED}
         self._websocket_connections.add(ws)
         return AsyncTestResponse(ws)
 
@@ -712,6 +758,9 @@ class UvicornTestServer(uvicorn.Server):
             yield
         finally:
             _signal_handlers.leave(self)
+        # uvicorn's handle_exit() records the signals in this private attribute.
+        # test_signal_stops_every_running_server_then_reaches_the_original_handler
+        # fails if a uvicorn release changes that.
         for captured_signal in reversed(self._captured_signals):
             signal.raise_signal(captured_signal)
 

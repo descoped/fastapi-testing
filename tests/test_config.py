@@ -1,7 +1,12 @@
+import json
 import os
+import socket
+from unittest.mock import patch
 
 import pytest
 
+import fastapi_testing.async_fastapi_testing
+from fastapi_testing import create_test_server, get_config, set_config
 from fastapi_testing.async_fastapi_testing import Config, PortGenerator
 
 
@@ -138,10 +143,89 @@ class TestConfig:
             for key, value in env_backup.items():
                 os.environ[key] = value
 
-    def test_config_from_file(self):
-        """Test Config.from_file() method (currently a placeholder)"""
-        result = Config.from_file("dummy.json")
-        assert result is None  # Current implementation just passes
+    def test_config_from_json_file(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"ws_max_message_size": 4096, "ws_retry_delay": 0.5, "port_range_start": 9100}))
+        config = Config.from_file(path)
+        assert config.WS_MAX_MESSAGE_SIZE == 4096
+        assert config.WS_RETRY_DELAY == 0.5
+        assert config.PORT_RANGE_START == 9100
+        assert config.HTTP_MAX_CONNECTIONS == 100  # untouched default
+
+    def test_config_from_toml_file(self, tmp_path):
+        path = tmp_path / "config.toml"
+        path.write_text("http_max_connections = 7\nws_retry_delay = 2\n")
+        config = Config.from_file(str(path))
+        assert config.HTTP_MAX_CONNECTIONS == 7
+        assert config.WS_RETRY_DELAY == 2  # an integer is accepted for a float setting
+
+    def test_config_from_pyproject_tool_table(self, tmp_path):
+        path = tmp_path / "pyproject.toml"
+        path.write_text('[project]\nname = "x"\n\n[tool.fastapi-testing]\nws_retry_attempts = 9\n')
+        assert Config.from_file(path).WS_RETRY_ATTEMPTS == 9
+
+    def test_config_from_pyproject_without_tool_table_uses_defaults(self, tmp_path):
+        path = tmp_path / "pyproject.toml"
+        path.write_text('[project]\nname = "x"\n\n[tool.ruff]\nline-length = 120\n')
+        assert Config.from_file(path).WS_RETRY_ATTEMPTS == 3
+
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            ('{"no_such_setting": 1}', "unknown setting"),
+            ('{"ws_retry_attempts": "5"}', "must be an integer"),
+            ('{"ws_retry_attempts": true}', "must be an integer"),
+            ('{"ws_retry_attempts": 1.5}', "must be an integer"),
+            ('{"ws_retry_delay": "fast"}', "must be a number"),
+            ("[1, 2]", "expected an object"),
+        ],
+    )
+    def test_config_from_file_rejects_invalid_content(self, tmp_path, content, message):
+        path = tmp_path / "config.json"
+        path.write_text(content)
+        with pytest.raises(ValueError, match=message):
+            Config.from_file(path)
+
+    def test_config_from_file_rejects_unsupported_type(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        path.write_text("ws_retry_attempts: 5\n")
+        with pytest.raises(ValueError, match="Unsupported config file type"):
+            Config.from_file(path)
+
+
+class TestSetConfig:
+    """set_config() must reach every part of the library, not only new imports."""
+
+    @pytest.fixture(autouse=True)
+    def restore_config(self):
+        original = get_config()
+        yield
+        set_config(original)
+
+    def test_set_config_replaces_active_config(self):
+        config = Config(ws_retry_attempts=7)
+        set_config(config)
+        assert get_config() is config
+        assert fastapi_testing.async_fastapi_testing.global_config is config
+
+    # Pretend every port is free: this tests the generator's bookkeeping, not the machine.
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_default_port_generator_follows_set_config(self, _free):
+        generator = PortGenerator()
+        set_config(Config(port_range_start=65520, port_range_end=65522))
+        assert (generator.start, generator.end) == (65520, 65522)
+        assert 65520 <= generator.get_port() <= 65522
+
+    def test_explicit_port_range_ignores_set_config(self):
+        generator = PortGenerator(start=65510, end=65511)
+        set_config(Config(port_range_start=65520, port_range_end=65522))
+        assert (generator.start, generator.end) == (65510, 65511)
+
+    async def test_server_uses_port_range_from_set_config(self):
+        set_config(Config(port_range_start=29100, port_range_end=29120))
+        async with create_test_server() as server:
+            port = int(server.base_url.rsplit(":", 1)[1])
+            assert 29100 <= port <= 29120
 
 
 class TestPortGenerator:
@@ -175,7 +259,11 @@ class TestPortGenerator:
         # Port 0 is actually a valid port that the system can bind to
         # so we'll test with a different edge case
 
-    def test_port_generator_exhaustion(self):
+    # These bookkeeping tests pretend every port is free. Real fixed ports such as
+    # 65530 lie in the OS ephemeral range (macOS: 49152-65535), where any process's
+    # outgoing connection can hold them, which made these tests fail at random.
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_port_generator_exhaustion(self, _free):
         """Test PortGenerator when all ports in small range are exhausted"""
         # Use a small range for testing
         generator = PortGenerator(start=65530, end=65532)
@@ -194,7 +282,8 @@ class TestPortGenerator:
         with pytest.raises(RuntimeError, match="No available ports in range"):
             generator.get_port()
 
-    def test_port_generator_release_port(self):
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_port_generator_release_port(self, _free):
         """Test releasing and reusing ports"""
         generator = PortGenerator(start=65530, end=65530)  # Single port
 
@@ -211,3 +300,45 @@ class TestPortGenerator:
         # Should be able to get it again
         port2 = generator.get_port()
         assert port2 == 65530
+
+    def test_is_port_available_sees_a_held_port(self):
+        with socket.socket() as holder:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            port = holder.getsockname()[1]
+            assert not PortGenerator.is_port_available(port)
+        assert PortGenerator.is_port_available(port)
+
+    def test_get_port_skips_a_held_port(self):
+        with socket.socket() as holder:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            held = holder.getsockname()[1]
+            generator = PortGenerator(start=held, end=held)
+            with pytest.raises(RuntimeError, match="No available ports found"):
+                generator.get_port()
+
+    def test_is_port_available_agrees_with_bind_for_a_time_wait_port(self):
+        """Whether a TIME_WAIT port is reusable is OS-specific (macOS: yes; Linux: only
+        if the earlier socket also set SO_REUSEADDR). What must hold everywhere is
+        that the availability check and the real bind agree."""
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            with socket.socket() as client:
+                client.bind(("127.0.0.1", 0))
+                port = client.getsockname()[1]
+                client.connect(listener.getsockname())
+                accepted, _ = listener.accept()
+            accepted.close()  # client closed first: its port is now in TIME_WAIT
+
+        available = PortGenerator.is_port_available(port)
+        generator = PortGenerator(start=port, end=port)
+        try:
+            sock = generator.bind("127.0.0.1")
+        except RuntimeError:
+            assert not available
+        else:
+            sock.close()
+            generator.release_port(port)
+            assert available

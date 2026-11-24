@@ -239,6 +239,13 @@ ws_config = WebSocketConfig(
 )
 ```
 
+A field left as `None` uses the default: `max_size` and `max_queue` come from the active `Config`, everything else
+from websockets. To pass `None` itself to websockets, for example to disable keepalive pings, use `options`:
+
+```python
+ws_response = await server.client.websocket("/ws", options={"ping_interval": None})
+```
+
 ## Advanced Usage
 
 ### Advanced Server Configuration
@@ -337,10 +344,58 @@ You can customize the server behavior:
 
 ```python
 server = AsyncTestServer(
-    startup_timeout=30.0,  # Seconds to wait for server startup
-    shutdown_timeout=10.0,  # Seconds to wait for server shutdown
+    startup_timeout=30.0,  # Seconds for lifespan startup plus the server becoming ready
+    shutdown_timeout=10.0,  # Seconds open connections get to finish, and again for lifespan shutdown
 )
 ```
+
+`create_test_server()` accepts the same `startup_timeout` and `shutdown_timeout` arguments.
+
+### Lifecycle guarantees
+
+`AsyncTestServer` owns the whole lifecycle; uvicorn only serves connections:
+
+- **Socket:** the server binds its own listening socket on `127.0.0.1` to a free port in the configured range, so no
+  other process can take the port between choosing and binding it. `stop()` always closes it.
+- **Lifespan:** the application's lifespan runs in a task the server owns, through the full ASGI application (so
+  middleware sees it). State yielded by the lifespan reaches `request.state` and `websocket.state`. You can assign
+  `server.app = create_app()` before `start()`; its lifespan is the one that runs.
+- **Startup:** lifespan startup runs first, then the server starts serving. If either fails or takes longer than
+  `startup_timeout`, `start()` releases everything acquired so far and raises `ServerStartupError`, chained to the
+  application's own exception.
+- **Shutdown:** `stop()` closes the client, stops accepting connections, gives open connections (for example SSE
+  streams) `shutdown_timeout` to finish and then closes them, runs the lifespan shutdown, closes the socket and
+  releases the port. If the lifespan shutdown fails or times out, `stop()` raises `ServerShutdownError` after all of
+  that is done. If `stop()` is cancelled or a step fails, the remaining steps still run, without waiting, before the
+  error propagates; on that path the lifespan is cancelled rather than shut down, so the code after its `yield` does
+  not run.
+
+### Global settings
+
+Port range, HTTP connection limits, WebSocket limits and connection retries are set with a `Config`. Activate it
+with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards:
+
+```python
+from fastapi_testing import Config, set_config
+
+set_config(Config(port_range_start=9000, port_range_end=9500, ws_retry_attempts=5))
+
+# or read FASTAPI_TESTING_* environment variables, e.g. FASTAPI_TESTING_PORT_RANGE_START=9000
+set_config(Config.from_env())
+
+# or load a JSON or TOML file; pyproject.toml is read from its [tool.fastapi-testing] table
+set_config(Config.from_file("pyproject.toml"))
+```
+
+```toml
+[tool.fastapi-testing]
+port_range_start = 9000
+port_range_end = 9500
+ws_max_message_size = 2097152
+```
+
+`get_config()` returns the active configuration. Assigning to an imported `global_config` name has no effect on the
+library; use `set_config()` instead.
 
 ## Best Practices
 
@@ -386,8 +441,10 @@ All tests follow modern async/await patterns and avoid mocks to ensure real-worl
 
 The framework provides clear error messages for common issues:
 
-- Server startup timeout
-- Port allocation failures
+- Server startup failures: if the app's lifespan startup raises, no port is free, or startup times out, `start()`
+  raises `ServerStartupError` (a `RuntimeError`), chained to the original exception, and releases everything
+- Server shutdown failures: if the app's lifespan shutdown raises or hangs, `stop()` raises `ServerShutdownError`
+  (a `RuntimeError`) after releasing everything, so the test that caused it fails
 - Connection errors
 - Invalid request formats
 

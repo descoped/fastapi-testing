@@ -28,6 +28,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.11', '3.12', '3.13', '3.14', '3.15']
+    env:
+      # uv follows .python-version (the local dev pin) unless told otherwise;
+      # without this every matrix job would run on that pinned version.
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
     - name: Checkout code
@@ -45,13 +49,14 @@ jobs:
     
     - name: Install dependencies
       run: |
-        uv sync --all-groups
+        uv sync --all-groups --locked
     
     - name: Run tests with coverage
       env:
         FASTAPI_TESTING_PORT_RANGE_START: 8001
         FASTAPI_TESTING_PORT_RANGE_END: 9000
       run: |
+        uv run python -c "import sys; v = sys.version_info; assert f'{v.major}.{v.minor}' == '${{ matrix.python-version }}', sys.version"
         uv run pytest -v --tb=short --cov=src/fastapi_testing --cov-report=xml --cov-report=term
     
     - name: Upload coverage reports to Codecov

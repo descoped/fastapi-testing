@@ -6,6 +6,8 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  # uv follows .python-version (the local dev pin) unless told otherwise.
+  UV_PYTHON: '3.11'
   UV_VERSION: '0.13.9'
 
 jobs:
@@ -79,7 +81,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --all-groups
+        uv sync --all-groups --locked
 
     - name: Run tests
       env:

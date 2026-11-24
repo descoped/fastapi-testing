@@ -1,10 +1,12 @@
 """Client correctness: status assertions, WebSocket connect retry, draining, URL building."""
 
+import ssl
 import subprocess
 import sys
 import textwrap
 import time
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import pytest
 from fastapi import WebSocket
@@ -175,6 +177,11 @@ def test_websocket_url_maps_only_the_scheme(base_url: str, expected: str):
     assert AsyncTestClient(base_url)._websocket_url("/ws") == expected
 
 
+def test_websocket_url_adds_a_missing_leading_slash():
+    # As httpx does for HTTP paths; before, "ws" was glued onto the port.
+    assert AsyncTestClient("http://127.0.0.1:8001")._websocket_url("ws") == "ws://127.0.0.1:8001/ws"
+
+
 @pytest.mark.parametrize("base_url", ["ftp://example.test", "example.test:8001"])
 def test_websocket_url_rejects_other_schemes(base_url: str):
     with pytest.raises(ValueError, match="Invalid base URL"):
@@ -192,3 +199,35 @@ async def test_client_speaks_http1():
 
         response = await server.client.get("/")
         assert response.httpx_response.http_version == "HTTP/1.1"
+
+
+@pytest.mark.asyncio
+async def test_closed_websocket_connections_are_not_kept():
+    async with create_test_server() as server:
+
+        @server.app.websocket("/ws")
+        async def ws(websocket: WebSocket):
+            await websocket.accept()
+            await websocket.close()
+
+        for _ in range(20):
+            response = await server.client.websocket("/ws")
+            await response.websocket().close()
+        # Only the most recent connection is tracked; the closed ones were dropped.
+        assert len(server.client._websocket_connections) <= 1
+
+
+@pytest.mark.asyncio
+async def test_tls_failure_is_not_retried(config: None):
+    set_config(Config(ws_retry_attempts=3, ws_retry_delay=0.01))
+    calls = 0
+
+    async def failing_connect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise ssl.SSLCertVerificationError("certificate verify failed")
+
+    async with AsyncTestClient("https://example.test") as client:
+        with patch("fastapi_testing.async_fastapi_testing.connect", failing_connect), pytest.raises(ssl.SSLError):
+            await client.websocket("/ws")
+    assert calls == 1

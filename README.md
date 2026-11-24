@@ -435,7 +435,10 @@ server = AsyncTestServer(
 Port range, HTTP connection limits, WebSocket limits and connection retries are set with a `Config`. Activate it
 with `set_config()`, for example in `conftest.py`; it applies to every server and connection created afterwards.
 WebSocket connects retry connection errors (refused, closed early, timed out) `ws_retry_attempts` times, `ws_retry_delay` seconds
-apart; a rejected handshake such as a 403 or 404 fails at once:
+apart; a rejected handshake such as a 403 or 404, or a TLS failure, fails at once. Values are checked when the `Config`
+is made: sizes, limits and attempts must be at least 1 (`http_max_keepalive` at least 0), `ws_retry_delay` a finite
+number of at least 0, and the port range from 1 to 65535 with the start not above the end; anything else raises
+`ValueError`:
 
 ```python
 from fastapi_testing import Config, set_config

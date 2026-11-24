@@ -4,13 +4,16 @@ import logging
 import math
 import os
 import random
+import signal
 import socket
 import sys
+import threading
 import tomllib
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import httpx
@@ -585,6 +588,58 @@ class AsyncTestClient:
             await self.close()
 
 
+# The signals uvicorn handles while serving; Ctrl+Break on Windows.
+_HANDLED_SIGNALS: tuple[int, ...] = (signal.SIGINT, signal.SIGTERM) + (
+    (signal.SIGBREAK,) if sys.platform == "win32" else ()
+)
+_SignalHandler = Callable[[int, FrameType | None], Any] | int | None
+
+
+class _SignalHandlers:
+    """Process-wide SIGINT/SIGTERM handling for every running test server.
+
+    uvicorn's ``capture_signals()`` saves the handler installed when ``serve()``
+    starts and restores it when ``serve()`` ends. That is only correct when
+    servers stop in reverse order of starting: stopping overlapping servers
+    A then B left A's dead ``handle_exit`` installed, so Ctrl-C and SIGTERM were
+    ignored for the rest of the process.
+
+    Here the original handlers are saved when the first server starts and
+    restored when the last one stops. In between, the installed handler is
+    always the ``handle_exit`` of the most recently started server that is
+    still running, the same bound method uvicorn installs (sse-starlette finds
+    the server through it).
+    """
+
+    def __init__(self) -> None:
+        self._running: list[uvicorn.Server] = []
+        self._originals: dict[int, _SignalHandler] = {}
+
+    def enter(self, server: uvicorn.Server) -> None:
+        if not self._running:
+            self._originals = {sig: signal.getsignal(sig) for sig in _HANDLED_SIGNALS}
+        self._running.append(server)
+        self._install()
+
+    def leave(self, server: uvicorn.Server) -> None:
+        with suppress(ValueError):
+            self._running.remove(server)
+        if self._running:
+            self._install()
+        else:
+            originals, self._originals = self._originals, {}
+            for sig, handler in originals.items():
+                signal.signal(sig, handler)
+
+    def _install(self) -> None:
+        handler = self._running[-1].handle_exit
+        for sig in _HANDLED_SIGNALS:
+            signal.signal(sig, handler)
+
+
+_signal_handlers = _SignalHandlers()
+
+
 class UvicornTestServer(uvicorn.Server):
     """Uvicorn test server with startup event support."""
 
@@ -602,6 +657,27 @@ class UvicornTestServer(uvicorn.Server):
         await super().startup(sockets=sockets)
         if not self.should_exit:
             self.startup_handler.set()
+
+    @override
+    @contextmanager
+    def capture_signals(self) -> Generator[None]:
+        """Capture SIGINT/SIGTERM like uvicorn, but correctly for overlapping servers.
+
+        See ``_SignalHandlers``. As in uvicorn, signals can only be handled in
+        the main thread, and a signal received while serving is raised again
+        once this server has stopped, so it reaches the next running server or
+        finally the original handler (Ctrl-C then raises ``KeyboardInterrupt``).
+        """
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        _signal_handlers.enter(self)
+        try:
+            yield
+        finally:
+            _signal_handlers.leave(self)
+        for captured_signal in reversed(self._captured_signals):
+            signal.raise_signal(captured_signal)
 
 
 class _LifespanRunner:
@@ -954,7 +1030,26 @@ class AsyncTestServer:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        await self.stop()
+        await self._stop_after(exc_val)
+
+    async def _stop_after(self, error: BaseException | None) -> None:
+        """Stop the server once the block using it has ended.
+
+        When the block raised, its exception is the failure to report: a
+        ``ServerShutdownError`` from ``stop()`` is attached to it as a note
+        instead of replacing it. When the block succeeded, the shutdown error
+        propagates as usual.
+        """
+        if error is None:
+            await self.stop()
+            return
+        try:
+            await self.stop()
+        except ServerShutdownError as e:
+            cause = e.__cause__
+            detail = f" (caused by {type(cause).__name__}: {cause})" if cause is not None and cause is not e else ""
+            error.add_note(f"fastapi-testing: stopping the server also failed: {e}{detail}")
+            logger.warning("Stopping the server failed after the test failed: %s", e, exc_info=e)
 
     @property
     def client(self) -> AsyncTestClient:
@@ -971,8 +1066,10 @@ async def create_test_server(
 ) -> AsyncGenerator[AsyncTestServer, None]:
     """Create and manage a TestServer instance with proper lifecycle"""
     server = AsyncTestServer(lifespan=lifespan, startup_timeout=startup_timeout, shutdown_timeout=shutdown_timeout)
+    await server.start()  # releases everything itself when it fails
     try:
-        await server.start()
         yield server
-    finally:
-        await server.stop()
+    except BaseException as e:
+        await server._stop_after(e)
+        raise
+    await server.stop()

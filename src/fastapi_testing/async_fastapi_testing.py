@@ -257,9 +257,13 @@ class PortGenerator:
     def bind(self, host: str) -> socket.socket:
         """Bind a TCP socket on ``host`` to a free port in the range and reserve it.
 
-        Binding is the availability check, so unlike ``get_port()`` followed by
-        a later bind, no other process can take the port in between. The
-        caller owns the socket and must close it and call ``release_port()``.
+        The socket is bound and listening when returned: binding is the
+        availability check, and listening right away makes the port exclusive
+        (on Linux, two ``SO_REUSEADDR`` sockets may bind the same port until one
+        listens), so unlike ``get_port()`` followed by a later bind, no other
+        process can take it. Connections that arrive before the server starts
+        serving wait in the backlog. The caller owns the socket and must close
+        it and call ``release_port()``.
         """
         candidates = list(set(range(self.start, self.end + 1)) - self.used_ports)
         if not candidates:
@@ -272,6 +276,7 @@ class PortGenerator:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 sock.bind((host, port))
+                sock.listen()
             except (OSError, OverflowError):
                 sock.close()
                 continue
@@ -625,6 +630,8 @@ class _LifespanRunner:
                 if phase == "shutdown":
                     return  # The application returned after shutting down: fine.
                 raise RuntimeError(f"Application returned during {phase}")
+            # An application that reported failure but kept running is not left behind.
+            await self.cancel()
             # Prefer the exception itself: the failure message from Starlette is a full traceback.
             raise RuntimeError(
                 f"Application {phase} failed: {error!r}" if error else f"Application {phase} failed: {self._failure}"
@@ -638,6 +645,7 @@ class _LifespanRunner:
     async def shutdown(self, timeout: float) -> None:
         if self.task is None or self.task.done():
             return
+        self._failure = None  # Each phase reports its own failure.
         await self._messages.put({"type": "lifespan.shutdown"})
         await self._wait(self._shutdown_done, timeout, "shutdown")
         # The application is expected to return after shutdown.complete.
@@ -645,10 +653,18 @@ class _LifespanRunner:
             await asyncio.wait({self.task}, timeout=1.0)
             await self.cancel()
 
+    # How long cancel() waits for the lifespan task. The bound keeps
+    # startup_timeout and shutdown_timeout meaningful when the application
+    # suppresses cancellation and keeps awaiting.
+    cancel_timeout: float = 5.0
+
     async def cancel(self) -> None:
+        """Cancel the lifespan task and wait for it, at most ``cancel_timeout`` seconds."""
         if self.task is not None and not self.task.done():
             self.task.cancel()
-            await asyncio.wait({self.task})
+            done, _ = await asyncio.wait({self.task}, timeout=self.cancel_timeout)
+            if not done:
+                logger.warning("Application lifespan ignored cancellation for %ss; leaving it", self.cancel_timeout)
 
 
 # Use the configurable PortGenerator instance
@@ -851,6 +867,13 @@ class AsyncTestServer:
                     # A failed startup is reported by start(); anything else is not actionable here.
                     logger.debug("Server task ended with an error", exc_info=task.exception())
             finally:
+                # When uvicorn did not run its own shutdown (interrupted stop(), or a
+                # start() that ended during uvicorn's startup), its asyncio servers
+                # still watch the socket. Closing them first removes that
+                # registration, so the closed file descriptor is not left in the
+                # event loop's selector for a later socket to collide with.
+                for listener in getattr(server, "servers", ()):
+                    listener.close()
                 if sock is not None:
                     sock.close()
                 if port is not None:

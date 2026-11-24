@@ -1,5 +1,7 @@
 import json
 import os
+import socket
+from unittest.mock import patch
 
 import pytest
 
@@ -206,7 +208,9 @@ class TestSetConfig:
         assert get_config() is config
         assert fastapi_testing.async_fastapi_testing.global_config is config
 
-    def test_default_port_generator_follows_set_config(self):
+    # Pretend every port is free: this tests the generator's bookkeeping, not the machine.
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_default_port_generator_follows_set_config(self, _free):
         generator = PortGenerator()
         set_config(Config(port_range_start=65520, port_range_end=65522))
         assert (generator.start, generator.end) == (65520, 65522)
@@ -218,10 +222,10 @@ class TestSetConfig:
         assert (generator.start, generator.end) == (65510, 65511)
 
     async def test_server_uses_port_range_from_set_config(self):
-        set_config(Config(port_range_start=65400, port_range_end=65420))
+        set_config(Config(port_range_start=29100, port_range_end=29120))
         async with create_test_server() as server:
             port = int(server.base_url.rsplit(":", 1)[1])
-            assert 65400 <= port <= 65420
+            assert 29100 <= port <= 29120
 
 
 class TestPortGenerator:
@@ -255,7 +259,11 @@ class TestPortGenerator:
         # Port 0 is actually a valid port that the system can bind to
         # so we'll test with a different edge case
 
-    def test_port_generator_exhaustion(self):
+    # These bookkeeping tests pretend every port is free. Real fixed ports such as
+    # 65530 lie in the OS ephemeral range (macOS: 49152-65535), where any process's
+    # outgoing connection can hold them, which made these tests fail at random.
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_port_generator_exhaustion(self, _free):
         """Test PortGenerator when all ports in small range are exhausted"""
         # Use a small range for testing
         generator = PortGenerator(start=65530, end=65532)
@@ -274,7 +282,8 @@ class TestPortGenerator:
         with pytest.raises(RuntimeError, match="No available ports in range"):
             generator.get_port()
 
-    def test_port_generator_release_port(self):
+    @patch.object(PortGenerator, "is_port_available", return_value=True)
+    def test_port_generator_release_port(self, _free):
         """Test releasing and reusing ports"""
         generator = PortGenerator(start=65530, end=65530)  # Single port
 
@@ -291,3 +300,33 @@ class TestPortGenerator:
         # Should be able to get it again
         port2 = generator.get_port()
         assert port2 == 65530
+
+    def test_is_port_available_sees_a_held_port(self):
+        with socket.socket() as holder:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            port = holder.getsockname()[1]
+            assert not PortGenerator.is_port_available(port)
+        assert PortGenerator.is_port_available(port)
+
+    def test_get_port_skips_a_held_port(self):
+        with socket.socket() as holder:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            held = holder.getsockname()[1]
+            generator = PortGenerator(start=held, end=held)
+            with pytest.raises(RuntimeError, match="No available ports found"):
+                generator.get_port()
+
+    def test_time_wait_port_counts_as_available(self):
+        """A port left in TIME_WAIT by a closed connection is free to bind (SO_REUSEADDR)."""
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            with socket.socket() as client:
+                client.bind(("127.0.0.1", 0))
+                port = client.getsockname()[1]
+                client.connect(listener.getsockname())
+                accepted, _ = listener.accept()
+            accepted.close()  # client closed first: its port is now in TIME_WAIT
+        assert PortGenerator.is_port_available(port)

@@ -342,3 +342,33 @@ class TestPortGenerator:
             sock.close()
             generator.release_port(port)
             assert available
+
+
+class TestSettingsSchema:
+    """The Config constructor is the one definition of the settings."""
+
+    def test_every_parameter_is_stored_as_its_upper_case_attribute(self):
+        from fastapi_testing.async_fastapi_testing import _SETTINGS
+
+        # Distinct values, so a parameter stored under the wrong attribute shows.
+        values = {name: (index + 2) * 7 for index, name in enumerate(_SETTINGS)}
+        config = Config(**values)
+        assert {name: getattr(config, name.upper()) for name in _SETTINGS} == values
+
+    def test_settings_are_integers_or_numbers(self):
+        from fastapi_testing.async_fastapi_testing import _SETTINGS
+
+        assert _SETTINGS, "no settings found in the Config signature"
+        assert set(_SETTINGS.values()) <= {int, float}
+
+    def test_env_and_file_accept_exactly_the_constructor_parameters(self, tmp_path):
+        from fastapi_testing.async_fastapi_testing import _SETTINGS
+
+        env = {f"FASTAPI_TESTING_{name.upper()}": "3" for name in _SETTINGS}
+        with patch.dict("os.environ", env, clear=True):
+            from_env = Config.from_env(strict=True)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps(dict.fromkeys(_SETTINGS, 3)))
+        from_file = Config.from_file(path)
+        for name in _SETTINGS:
+            assert getattr(from_env, name.upper()) == getattr(from_file, name.upper()) == 3

@@ -59,6 +59,8 @@ exclude = [
     "examples/*",
     "tests/*",
     ".github/*",
+    ".claude-plugin/*",
+    "plugins/*",
     "*.gif",
     "*.png",
     "dist/*",
@@ -84,7 +86,7 @@ url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "plugins/fastapi-testing/skills/write-tests/examples"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -94,8 +96,8 @@ asyncio_default_fixture_loop_scope = "function"
 # project environment as `.venv` next to this file; pyright does not find it on its own.
 venvPath = "."
 venv = ".venv"
-# Same scope as ty ([tool.ty.src]) and the CI gate.
-include = ["src", "tests"]
+# Same scope as ty ([tool.ty.src]) and the CI gate, plus the plugin's runnable examples.
+include = ["src", "tests", "plugins/fastapi-testing/skills/write-tests/examples"]
 # Check against the lowest supported Python so newer-only syntax is caught.
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
@@ -115,7 +117,7 @@ reportUnnecessaryTypeIgnoreComment = "error"
 # `ty: ignore`.
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["src", "tests", "plugins/fastapi-testing/skills/write-tests/examples"]
 
 [tool.ty.analysis]
 # Only `ty: ignore` silences ty; `type: ignore[...]` comments must not hide ty diagnostics.

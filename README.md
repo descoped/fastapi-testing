@@ -29,6 +29,17 @@ Or with pip:
 pip install fastapi-testing
 ```
 
+### Claude Code plugin
+
+The repository is also a Claude Code plugin marketplace. Its `fastapi-testing` plugin teaches Claude Code this
+library: writing fixtures and tests (dependency overrides, fake upstream services, SSE and WebSockets) and
+diagnosing suites that hang or leak. Its version follows the library release.
+
+```bash
+claude plugin marketplace add descoped/fastapi-testing
+claude plugin install fastapi-testing@fastapi-testing
+```
+
 ## Quick Start
 
 Here's a simple example of how to test a FastAPI endpoint:

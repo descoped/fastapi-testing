@@ -1,0 +1,25 @@
+{
+  "name": "fastapi-testing",
+  "owner": {
+    "name": "Descoped"
+  },
+  "description": "Agent skills for fastapi-testing, the async integration test library that serves your FastAPI app on a real uvicorn server.",
+  "plugins": [
+    {
+      "name": "fastapi-testing",
+      "source": "./plugins/fastapi-testing",
+      "description": "Skills that help a coding agent write real integration tests with fastapi-testing: fixtures, dependency overrides, fake upstream services, SSE and WebSocket tests, and diagnosing hangs and leaks.",
+      "relevance": {
+        "topic": "fastapi-testing",
+        "signals": {
+          "manifestDeps": [
+            {
+              "file": "(pyproject\\.toml|requirements[^/\\\\]*\\.txt)$",
+              "pattern": "fastapi-testing"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

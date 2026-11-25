@@ -1,6 +1,6 @@
 # FastAPI Testing
 
-[![Build Status](https://github.com/descoped/fastapi-testing/actions/workflows/build-test.yml/badge.svg)](https://github.com/descoped/fastapi-testing/actions/workflows/build-test-native.yml)
+[![Build Status](https://github.com/descoped/fastapi-testing/actions/workflows/build-test.yml/badge.svg)](https://github.com/descoped/fastapi-testing/actions/workflows/build-test.yml)
 [![Coverage](https://codecov.io/gh/descoped/fastapi-testing/branch/master/graph/badge.svg)](https://codecov.io/gh/descoped/fastapi-testing)
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,7 +14,7 @@ A lightweight, async-first testing framework designed specifically for FastAPI a
 - Automatic port management for test servers
 - Clean lifecycle management with context managers
 - Built-in HTTP and WebSocket client support
-- Proper cleanup of resources after tests
+- Proper cleanup of resources after tests, with a fast stop by default (graceful drain is opt-in)
 - Support for FastAPI's lifespan events
 - Type-safe with full typing support
 
@@ -62,37 +62,30 @@ sequenceDiagram
     participant Test
     participant AsyncTestServer
     participant PortGenerator
+    participant Lifespan as Lifespan (owned task)
     participant UvicornServer
-    participant FastAPI
     participant AsyncTestClient
 
     Test->>+AsyncTestServer: create_test_server()
-    AsyncTestServer->>+PortGenerator: get_port()
-    PortGenerator-->>-AsyncTestServer: available port
-    
-    AsyncTestServer->>+UvicornServer: initialize
-    UvicornServer->>FastAPI: configure
-    
-    AsyncTestServer->>+UvicornServer: start()
-    UvicornServer->>FastAPI: startup event
-    UvicornServer-->>AsyncTestServer: server ready
-    
-    AsyncTestServer->>+AsyncTestClient: initialize
-    AsyncTestClient-->>-AsyncTestServer: client ready
-    AsyncTestServer-->>-Test: server instance
-    
+    AsyncTestServer->>+PortGenerator: bind()
+    PortGenerator-->>-AsyncTestServer: listening socket on a free port
+
+    AsyncTestServer->>+Lifespan: lifespan startup (through the full ASGI app)
+    Lifespan-->>AsyncTestServer: started, with lifespan state
+
+    AsyncTestServer->>+UvicornServer: serve(sockets=[socket]), lifespan off
+    UvicornServer-->>AsyncTestServer: ready
+    AsyncTestServer-->>-Test: server instance (server.client ready)
+
     Note over Test,AsyncTestClient: Test execution happens here
-    
-    Test->>+AsyncTestServer: cleanup (context exit)
-    AsyncTestServer->>+AsyncTestClient: close()
-    AsyncTestClient-->>-AsyncTestServer: closed
-    
-    AsyncTestServer->>+UvicornServer: shutdown
-    UvicornServer->>FastAPI: shutdown event
-    UvicornServer-->>-AsyncTestServer: shutdown complete
-    
-    AsyncTestServer->>+PortGenerator: release_port()
-    PortGenerator-->>-AsyncTestServer: port released
+
+    Test->>+AsyncTestServer: stop() (context exit)
+    AsyncTestServer->>AsyncTestClient: close()
+    AsyncTestServer->>UvicornServer: stop HTTP ("fast": close connections now; "graceful": drain)
+    UvicornServer-->>-AsyncTestServer: stopped
+    AsyncTestServer->>Lifespan: lifespan shutdown
+    Lifespan-->>-AsyncTestServer: shut down
+    AsyncTestServer->>PortGenerator: close socket, release port
     AsyncTestServer-->>-Test: cleanup complete
 ```
 
@@ -169,7 +162,7 @@ while it shuts down, such as an in-flight request still completing:
 async with create_test_server(shutdown="graceful") as server:
     ...
 
-set_config(Config(shutdown="graceful"))  # or for every server: FASTAPI_TESTING_SHUTDOWN=graceful
+set_config(Config(shutdown="graceful"))  # for every server; or FASTAPI_TESTING_SHUTDOWN=graceful with Config.from_env()
 ```
 
 A streaming response (for example SSE) still open at stop ends the same way in both modes, and the same way as when
@@ -421,12 +414,15 @@ You can customize the server behavior:
 
 ```python
 server = AsyncTestServer(
-    startup_timeout=30.0,  # Seconds for lifespan startup plus the server becoming ready
-    shutdown_timeout=10.0,  # Seconds open connections get to finish, and again for lifespan shutdown
+    app=create_app(),  # your application; omit it for an empty FastAPI app (or pass lifespan=)
+    startup_timeout=30.0,  # seconds for lifespan startup plus the server becoming ready
+    shutdown_timeout=10.0,  # seconds for lifespan shutdown; in "graceful" mode also open connections
+    client_timeout=30.0,  # seconds for each request made with server.client
+    shutdown="fast",  # or "graceful"; None (the default) uses the active Config
 )
 ```
 
-`create_test_server()` accepts the same `startup_timeout` and `shutdown_timeout` arguments.
+`create_test_server()` accepts the same arguments.
 
 ### Lifecycle guarantees
 
@@ -498,7 +494,7 @@ library; use `set_config()` instead.
 
 ## Testing
 
-The framework itself is thoroughly tested with >88% code coverage, ensuring reliability for production use.
+The library is tested on Python 3.11 to 3.15 with about 97% code coverage, and type-checked with pyright and ty.
 
 ### Running Tests
 

@@ -66,7 +66,7 @@ class TestOwnedSocket:
 
 class TestOwnedLifespan:
     async def test_replaced_app_runs_its_lifespan(self):
-        """Factflow's pattern: build the production app and assign it before start()."""
+        """A common consumer pattern: build the production app and assign it before start()."""
         events: list[str] = []
 
         @asynccontextmanager

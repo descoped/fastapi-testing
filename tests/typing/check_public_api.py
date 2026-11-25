@@ -23,6 +23,7 @@ from fastapi_testing import (
     AsyncTestServer,
     Config,
     PortGenerator,
+    ShutdownMode,
     WebSocketConfig,
     WebSocketHelper,
     create_test_server,
@@ -70,6 +71,14 @@ async def server_types() -> None:
 
     async with create_test_server(app=FastAPI(), client_timeout=5.0) as server:
         assert_type(server.app, FastAPI)
+
+    mode: ShutdownMode = "graceful"
+    async with create_test_server(shutdown=mode) as server:
+        assert_type(server, AsyncTestServer)
+    assert_type(Config().SHUTDOWN, ShutdownMode)
+
+    # The shutdown mode is one of the two names
+    AsyncTestServer(shutdown="slow")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]
 
     # app and client_timeout are keyword-only
     AsyncTestServer(None, 30.0, 10.0, FastAPI())  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]

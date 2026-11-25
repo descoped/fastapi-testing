@@ -1,0 +1,12 @@
+{
+  "name": "fastapi-testing",
+  "version": "0.5.0",
+  "description": "Skills for fastapi-testing: write integration tests that serve a FastAPI app on a real uvicorn server, with fixtures that own their resources, dependency overrides, fake upstream services, SSE and WebSocket tests, and fast or graceful shutdown; and diagnose hangs, leaks and upgrade breakage.",
+  "author": {
+    "name": "Descoped"
+  },
+  "homepage": "https://github.com/descoped/fastapi-testing",
+  "repository": "https://github.com/descoped/fastapi-testing",
+  "license": "MIT",
+  "keywords": ["fastapi", "testing", "pytest", "pytest-asyncio", "integration-testing", "uvicorn", "websocket", "sse"]
+}

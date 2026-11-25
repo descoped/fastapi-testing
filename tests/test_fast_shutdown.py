@@ -185,14 +185,17 @@ async def test_graceful_lets_an_in_flight_request_finish():
     server = AsyncTestServer(shutdown="graceful", shutdown_timeout=5)
     await server.start()
 
+    started = asyncio.Event()
+
     @server.app.get("/slow")
     async def slow():
+        started.set()
         await asyncio.sleep(0.5)
         return {"done": True}
 
     async with httpx.AsyncClient(base_url=server.base_url) as client:
         request = asyncio.create_task(client.get("/slow"))
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(started.wait(), timeout=5)
         await server.stop()
         response = await request
     assert response.json() == {"done": True}

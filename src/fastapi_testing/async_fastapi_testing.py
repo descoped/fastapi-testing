@@ -959,8 +959,9 @@ class AsyncTestServer:
         lifespan: lifespan for the empty ``FastAPI`` app the server creates.
         startup_timeout: seconds the application's lifespan startup and the
             server's own startup may take together.
-        shutdown_timeout: seconds open connections get to finish, and then the
-            lifespan shutdown gets, when the server stops.
+        shutdown_timeout: seconds the lifespan shutdown gets when the server
+            stops; in ``"graceful"`` mode also the seconds open connections get
+            to finish first (in ``"fast"`` mode they get ``request_grace``).
         app: the application to serve, e.g. ``create_app()``. Its own lifespan
             runs; combining it with ``lifespan`` is an error. Without it the
             server creates an empty ``FastAPI`` app to add routes to.

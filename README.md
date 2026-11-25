@@ -417,7 +417,7 @@ server = AsyncTestServer(
     app=create_app(),  # your application; omit it for an empty FastAPI app (or pass lifespan=)
     startup_timeout=30.0,  # seconds for lifespan startup plus the server becoming ready
     shutdown_timeout=10.0,  # seconds for lifespan shutdown; in "graceful" mode also open connections
-    client_timeout=30.0,  # seconds for each request made with server.client
+    client_timeout=30.0,  # seconds for each request with server.client, and opening its WebSockets
     shutdown="fast",  # or "graceful"; None (the default) uses the active Config
 )
 ```

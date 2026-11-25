@@ -6,6 +6,7 @@ import threading
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from types import FrameType
+from typing import Literal
 
 import pytest
 from fastapi import FastAPI
@@ -100,6 +101,21 @@ async def test_signal_stops_every_running_server_then_reaches_the_original_handl
     finally:
         await a.stop()
         await b.stop()
+    assert recorded_signals == [signal.SIGINT]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown", ["fast", "graceful"])
+async def test_signal_received_just_before_stop_still_reaches_the_original_handler(
+    recorded_signals: list[int], shutdown: Literal["fast", "graceful"]
+):
+    """stop() right after a signal, before uvicorn's main loop notices it (it polls every 0.1 s)."""
+    server = AsyncTestServer(shutdown=shutdown)
+    await server.start()
+    assert server._server is not None
+    server._server.handle_exit(signal.SIGINT, None)
+    await server.stop()
+    await _wait_for(lambda: recorded_signals == [signal.SIGINT])
     assert recorded_signals == [signal.SIGINT]
 
 

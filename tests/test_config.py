@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -351,31 +352,53 @@ class TestPortGenerator:
 class TestSettingsSchema:
     """The Config constructor is the one definition of the settings."""
 
+    @staticmethod
+    def _sample(index: int, kind: object) -> Any:
+        """A valid value for a setting, distinct per setting where the type allows it."""
+        from fastapi_testing.async_fastapi_testing import _choices
+
+        choices = _choices(kind)
+        return choices[-1] if choices else (index + 2) * 7
+
     def test_every_parameter_is_stored_as_its_upper_case_attribute(self):
         from fastapi_testing.async_fastapi_testing import _SETTINGS
 
         # Distinct values, so a parameter stored under the wrong attribute shows.
-        values = {name: (index + 2) * 7 for index, name in enumerate(_SETTINGS)}
+        values = {name: self._sample(index, kind) for index, (name, kind) in enumerate(_SETTINGS.items())}
         config = Config(**values)
         assert {name: getattr(config, name.upper()) for name in _SETTINGS} == values
 
-    def test_settings_are_integers_or_numbers(self):
-        from fastapi_testing.async_fastapi_testing import _SETTINGS
+    def test_settings_are_numbers_or_a_fixed_set_of_strings(self):
+        from fastapi_testing.async_fastapi_testing import _SETTINGS, _choices
 
         assert _SETTINGS, "no settings found in the Config signature"
-        assert set(_SETTINGS.values()) <= {int, float}
+        for name, kind in _SETTINGS.items():
+            assert kind in (int, float) or _choices(kind), f"{name}: unsupported setting type {kind!r}"
 
     def test_env_and_file_accept_every_constructor_parameter(self, tmp_path):
-        from fastapi_testing.async_fastapi_testing import _SETTINGS
+        from fastapi_testing.async_fastapi_testing import _SETTINGS, _choices
 
-        env = {f"FASTAPI_TESTING_{name.upper()}": "3" for name in _SETTINGS}
+        values = {name: (_choices(kind)[-1] if _choices(kind) else 3) for name, kind in _SETTINGS.items()}
+        env = {f"FASTAPI_TESTING_{name.upper()}": str(value) for name, value in values.items()}
         with patch.dict("os.environ", env, clear=True):
             from_env = Config.from_env(strict=True)
         path = tmp_path / "settings.json"
-        path.write_text(json.dumps(dict.fromkeys(_SETTINGS, 3)))
+        path.write_text(json.dumps(values))
         from_file = Config.from_file(path)
-        for name in _SETTINGS:
-            assert getattr(from_env, name.upper()) == getattr(from_file, name.upper()) == 3
+        for name, value in values.items():
+            assert getattr(from_env, name.upper()) == getattr(from_file, name.upper()) == value
+
+    def test_shutdown_setting_is_validated_by_every_source(self, tmp_path):
+        with pytest.raises(ValueError, match="shutdown must be one of 'fast', 'graceful', got 'slow'"):
+            Config(shutdown="slow")  # pyright: ignore[reportArgumentType]  # ty: ignore[invalid-argument-type]
+        with patch.dict("os.environ", {"FASTAPI_TESTING_SHUTDOWN": "slow"}, clear=True), pytest.raises(ValueError):
+            Config.from_env(strict=True)
+        with patch.dict("os.environ", {"FASTAPI_TESTING_SHUTDOWN": "graceful"}, clear=True):
+            assert Config.from_env(strict=True).SHUTDOWN == "graceful"
+        path = tmp_path / "settings.json"
+        path.write_text('{"shutdown": 1}')
+        with pytest.raises(ValueError, match="'shutdown' must be one of 'fast', 'graceful'"):
+            Config.from_file(path)
 
 
 class TestSettingRanges:

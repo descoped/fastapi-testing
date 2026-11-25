@@ -305,8 +305,9 @@ class TestShutdown:
         await server.stop()
         assert observed == {"refused_during_shutdown": True}
 
-    async def test_open_stream_does_not_block_stop(self):
-        async with create_test_server(shutdown_timeout=1.0) as server:
+    @pytest.mark.parametrize("mode", ["fast", "graceful"])
+    async def test_open_stream_does_not_block_stop(self, mode):
+        async with create_test_server(shutdown_timeout=1.0, shutdown=mode) as server:
 
             @server.app.get("/forever")
             async def forever():
@@ -334,8 +335,8 @@ class TestShutdown:
 
             began = time.monotonic()
             await server.stop()
-            # Graceful period (shutdown_timeout) plus uvicorn's polling, never the 30 s defaults.
-            assert time.monotonic() - began < 5.0
+            # Fast: closed at once. Graceful: shutdown_timeout plus uvicorn's polling, never the 30 s defaults.
+            assert time.monotonic() - began < (0.5 if mode == "fast" else 5.0)
             assert _port_refuses_connections(port)
 
             consumer.cancel()

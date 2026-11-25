@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType, TracebackType
-from typing import Any, Self
+from typing import Any, Literal, Self, get_args
 
 import httpx
 import uvicorn
@@ -41,6 +41,10 @@ DEFAULT_MAX_CONNS = 100
 DEFAULT_WS_RETRY_ATTEMPTS = 3
 DEFAULT_WS_RETRY_DELAY = 1.0
 
+# How a server stops (see AsyncTestServer): "fast" closes open connections at
+# once, "graceful" lets them finish first. Both release every resource.
+ShutdownMode = Literal["fast", "graceful"]
+
 
 class Config:
     """Global configuration settings for fastapi-testing.
@@ -62,6 +66,7 @@ class Config:
         ws_retry_delay: float = DEFAULT_WS_RETRY_DELAY,
         port_range_start: int = 8001,
         port_range_end: int = 9000,
+        shutdown: ShutdownMode = "fast",
     ):
         for name, value in (
             ("ws_max_message_size", ws_max_message_size),
@@ -72,6 +77,7 @@ class Config:
             ("ws_retry_delay", ws_retry_delay),
             ("port_range_start", port_range_start),
             ("port_range_end", port_range_end),
+            ("shutdown", shutdown),
         ):
             problem = _out_of_range(name, value)
             if problem:
@@ -87,6 +93,7 @@ class Config:
         self.WS_RETRY_DELAY = ws_retry_delay
         self.PORT_RANGE_START = port_range_start
         self.PORT_RANGE_END = port_range_end
+        self.SHUTDOWN: ShutdownMode = shutdown
 
     @classmethod
     def from_env(cls, prefix: str = "FASTAPI_TESTING_", *, strict: bool = False) -> Self:
@@ -112,7 +119,7 @@ class Config:
                 problems.append(f"{env_key}: unknown setting")
                 continue
             try:
-                value = kind(env_value)
+                value = env_value if _choices(kind) else kind(env_value)
             except ValueError:
                 problems.append(f"{env_key}: must be {_describe(kind)}, got {env_value!r}")
                 continue
@@ -173,7 +180,7 @@ class Config:
         for key, value in data.items():
             kind = _SETTINGS[key]
             # An integer is accepted for a float setting; a bool is not a number here.
-            accepted = (int, float) if kind is float else kind
+            accepted = str if _choices(kind) else (int, float) if kind is float else kind
             if isinstance(value, bool) or not isinstance(value, accepted):
                 raise ValueError(f"{path}: {key!r} must be {_describe(kind)}, got {value!r}")
             out_of_range = _out_of_range(key, value)
@@ -188,16 +195,25 @@ class Config:
         return cls(**data)
 
 
-# Setting name -> type, from the Config constructor (see Config). The annotations are not
-# checked statically; tests/test_config.py::TestSettingsSchema checks they are int or float.
-_SETTINGS: dict[str, type[int] | type[float]] = {
+# Setting name -> type, from the Config constructor (see Config): int, float, or a Literal
+# of allowed strings. The annotations are not checked statically;
+# tests/test_config.py::TestSettingsSchema checks they are one of those.
+_SETTINGS: dict[str, Any] = {
     name: parameter.annotation
     for name, parameter in inspect.signature(Config.__init__, eval_str=True).parameters.items()
     if name != "self"
 }
 
 
-def _describe(kind: type) -> str:
+def _choices(kind: object) -> tuple[str, ...]:
+    """The allowed values of a Literal setting, or () for a number setting."""
+    return tuple(str(c) for c in get_args(kind)) if getattr(kind, "__origin__", None) is Literal else ()
+
+
+def _describe(kind: object) -> str:
+    choices = _choices(kind)
+    if choices:
+        return "one of " + ", ".join(map(repr, choices))
     return "an integer" if kind is int else "a number"
 
 
@@ -220,6 +236,9 @@ _MINIMUMS: dict[str, float] = {"http_max_keepalive": 0, "ws_retry_delay": 0}
 
 def _out_of_range(name: str, value: object) -> str | None:
     """Why ``value`` is not acceptable for setting ``name``, or None when it is."""
+    choices = _choices(_SETTINGS.get(name))
+    if choices:
+        return None if value in choices else f"must be {_describe(_SETTINGS[name])}"
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return "must be a number"
     if name.startswith("port_range_"):
@@ -791,11 +810,13 @@ class UvicornTestServer(uvicorn.Server):
             yield
         finally:
             _signal_handlers.leave(self)
-        # uvicorn's handle_exit() records the signals in this private attribute.
-        # test_signal_stops_every_running_server_then_reaches_the_original_handler
-        # fails if a uvicorn release changes that.
-        for captured_signal in reversed(self._captured_signals):
-            signal.raise_signal(captured_signal)
+            # Also when serve() is cancelled (a fast stop), so a signal received
+            # just before stop() is not lost. uvicorn's handle_exit() records the
+            # signals in this private attribute;
+            # test_signal_stops_every_running_server_then_reaches_the_original_handler
+            # fails if a uvicorn release changes that.
+            for captured_signal in reversed(self._captured_signals):
+                signal.raise_signal(captured_signal)
 
 
 class _LifespanRunner:
@@ -929,10 +950,10 @@ class AsyncTestServer:
       failures raise ``ServerStartupError`` chained to the application's own
       exception, a hung startup fails within ``startup_timeout``, and shutdown
       failures raise ``ServerShutdownError``.
-    * ``stop()`` runs in a fixed order: close the client, stop HTTP (open
-      connections get ``shutdown_timeout`` to finish, then are closed), run the
-      lifespan shutdown, close the socket, release the port. Every step runs
-      even when an earlier one fails or ``stop()`` is cancelled.
+    * ``stop()`` runs in a fixed order: close the client, stop HTTP (see
+      ``shutdown``), run the lifespan shutdown, close the socket, release the
+      port. Every step runs even when an earlier one fails or ``stop()`` is
+      cancelled.
 
     Args:
         lifespan: lifespan for the empty ``FastAPI`` app the server creates.
@@ -945,6 +966,12 @@ class AsyncTestServer:
             server creates an empty ``FastAPI`` app to add routes to.
         client_timeout: timeout in seconds for each request made with
             ``server.client`` and for opening its WebSocket connections.
+        shutdown: how ``stop()`` treats connections still open. ``"fast"``
+            closes them at once, as a client disconnect, and cancels requests
+            still running after ``request_grace``; ``"graceful"`` gives them
+            ``shutdown_timeout`` to finish, as uvicorn does. Both run the
+            lifespan shutdown and release every resource. ``None`` (the
+            default) uses the active ``Config`` (``"fast"`` unless changed).
 
     ``app`` may also be replaced (``server.app = create_app()``) before ``start()``.
     """
@@ -957,13 +984,19 @@ class AsyncTestServer:
         *,
         app: FastAPI | None = None,
         client_timeout: float = 30.0,
+        shutdown: ShutdownMode | None = None,
     ):
+        if shutdown is not None and shutdown not in get_args(ShutdownMode):
+            raise ValueError(
+                f"shutdown must be one of {', '.join(map(repr, get_args(ShutdownMode)))}, got {shutdown!r}"
+            )
         if app is not None and lifespan is not None:
             raise ValueError("Pass either app or lifespan: an application brings its own lifespan")
         self.app = app if app is not None else FastAPI(lifespan=lifespan)
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
         self.client_timeout = client_timeout
+        self.shutdown: ShutdownMode | None = shutdown
         self._server_task: asyncio.Task[None] | None = None
         self._port: int | None = None
         self._host = "127.0.0.1"
@@ -971,6 +1004,9 @@ class AsyncTestServer:
         self._server: UvicornTestServer | None = None
         self._socket: socket.socket | None = None
         self._lifespan: _LifespanRunner | None = None
+        # Requests being handled, and whether a fast stop is ending them.
+        self._requests: set[asyncio.Task[Any]] = set()
+        self._aborting = False
 
     async def _asgi(self, scope: Scope, receive: Receive, send: Send) -> None:
         """The ASGI entry point given to uvicorn.
@@ -981,7 +1017,20 @@ class AsyncTestServer:
         """
         if self._lifespan is not None and scope["type"] in ("http", "websocket"):
             scope["state"] = {**self._lifespan.state, **scope.get("state", {})}
-        await self.app(scope, receive, send)
+        task = asyncio.current_task()
+        if task is not None:
+            self._requests.add(task)
+        try:
+            await self.app(scope, receive, send)
+        except asyncio.CancelledError:
+            if not self._aborting:
+                raise
+            # A fast stop ended this request after its connection was closed.
+            # Returning (instead of raising) keeps uvicorn from logging it as an
+            # application error; the task ends right after.
+        finally:
+            if task is not None:
+                self._requests.discard(task)
 
     async def _serve(self) -> None:
         """Run uvicorn, turning its ``sys.exit()`` on startup failure into an exception.
@@ -1008,6 +1057,7 @@ class AsyncTestServer:
         """
         if self._server_task is not None or self._lifespan is not None:
             raise RuntimeError("Server is already running")
+        self._aborting = False
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.startup_timeout
@@ -1072,12 +1122,65 @@ class AsyncTestServer:
                 await self.stop()
             raise
 
+    def _shutdown_mode(self) -> ShutdownMode:
+        return self.shutdown if self.shutdown is not None else global_config.SHUTDOWN
+
+    # How long a fast stop lets requests finish after their connections closed,
+    # before cancelling them. Streaming responses (SSE) end as soon as they see
+    # the disconnect, so this is normally not waited for at all.
+    request_grace: float = 0.5
+
+    async def _stop_http_fast(self, server: "UvicornTestServer | None", task: asyncio.Task[None]) -> None:
+        """Stop serving without uvicorn's graceful drain, releasing everything it would.
+
+        uvicorn's own shutdown spends about 200 ms in fixed polling sleeps even
+        when nothing is open. Here, in order:
+
+        1. Close the listening servers and stop the server task.
+        2. Close every open connection, which to the application is the client
+           disconnecting: streaming handlers receive ``http.disconnect`` and end.
+        3. Wait for requests still running, at most ``request_grace`` seconds,
+           then cancel the rest (quietly, see ``_asgi``) and wait for them.
+        """
+        if server is not None:
+            server.should_exit = True
+            server.force_exit = True
+            # Stop accepting first, so no request starts after the snapshot below.
+            # A server whose startup ended early may not have these yet.
+            for listener in getattr(server, "servers", ()):
+                listener.close()
+        task.cancel()
+        await asyncio.wait({task}, timeout=_LifespanRunner.cancel_timeout)
+        if server is None:
+            return
+        # uvicorn tracks its protocol instances in server_state.connections; its own
+        # shutdown() walks the same set. Closing the transport is a disconnect.
+        for connection in list(getattr(getattr(server, "server_state", None), "connections", ())):
+            transport = getattr(connection, "transport", None)
+            if transport is not None:
+                transport.close()
+        requests = set(self._requests)
+        if requests:
+            _, running = await asyncio.wait(requests, timeout=self.request_grace)
+            if running:
+                self._aborting = True
+                for request in running:
+                    request.cancel()
+                _, stuck = await asyncio.wait(running, timeout=_LifespanRunner.cancel_timeout)
+                if stuck:
+                    logger.warning("%d request(s) ignored cancellation at stop; leaving them", len(stuck))
+        # Let the closed transports deliver connection_lost before the socket closes.
+        await asyncio.sleep(0)
+
     async def stop(self) -> None:
         """Stop the server and release every resource, in a fixed order.
 
         1. Close the client and its WebSocket connections.
-        2. Stop HTTP: stop accepting, give open connections ``shutdown_timeout``
-           to finish, then close them (uvicorn's graceful shutdown).
+        2. Stop HTTP. ``"fast"`` (the default): close open connections at once,
+           as a client disconnect, and cancel requests still running after
+           ``request_grace``. ``"graceful"``: stop accepting and give open
+           connections ``shutdown_timeout`` to finish (uvicorn's graceful
+           shutdown), then close them.
         3. Run the application's lifespan shutdown, within ``shutdown_timeout``.
         4. Close the socket and release the port.
 
@@ -1101,7 +1204,9 @@ class AsyncTestServer:
             if client is not None:
                 await client.close()
 
-            if task is not None:
+            if task is not None and self._shutdown_mode() == "fast":
+                await self._stop_http_fast(server, task)
+            elif task is not None:
                 if server is not None:
                     server.should_exit = True
                 # uvicorn bounds the connection wait by timeout_graceful_shutdown;
@@ -1205,6 +1310,7 @@ async def create_test_server(
     *,
     app: FastAPI | None = None,
     client_timeout: float = 30.0,
+    shutdown: ShutdownMode | None = None,
 ) -> AsyncGenerator[AsyncTestServer, None]:
     """Start an ``AsyncTestServer``, yield it, and stop it when the block exits.
 
@@ -1217,6 +1323,7 @@ async def create_test_server(
         shutdown_timeout=shutdown_timeout,
         app=app,
         client_timeout=client_timeout,
+        shutdown=shutdown,
     )
     await server.start()  # releases everything itself when it fails
     try:

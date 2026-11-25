@@ -144,13 +144,37 @@ given, so passing both raises `ValueError`.
 | Parameter | Default | Bounds |
 |---|---|---|
 | `startup_timeout` | 30 s | the application's lifespan startup and the server's own startup, together |
-| `shutdown_timeout` | 10 s | open connections finishing on stop, then the lifespan shutdown |
+| `shutdown_timeout` | 10 s | the lifespan shutdown; in `"graceful"` mode also open connections finishing on stop |
 | `client_timeout` | 30 s | each request with `server.client`, and opening its WebSocket connections |
 
 ```python
 async with create_test_server(startup_timeout=60.0, client_timeout=5.0) as server:
     ...
 ```
+
+### Fast and graceful shutdown
+
+`stop()` releases every resource in both modes: connections, in-flight requests, the application's lifespan shutdown,
+the socket, the port and the signal handlers. The modes differ only in how long open connections get:
+
+| `shutdown` | Open connections and in-flight requests | Cost of `stop()` |
+|---|---|---|
+| `"fast"` (default) | closed at once, which the application sees as its client disconnecting; requests still running after 0.5 s are cancelled | about a millisecond |
+| `"graceful"` | stop accepting and give them `shutdown_timeout` to finish, as uvicorn does in production | about 200 ms (uvicorn's polling), or until they finish |
+
+Fast suits test suites that start a server per test. Use graceful for a test that checks what the application does
+while it shuts down, such as an in-flight request still completing:
+
+```python
+async with create_test_server(shutdown="graceful") as server:
+    ...
+
+set_config(Config(shutdown="graceful"))  # or for every server: FASTAPI_TESTING_SHUTDOWN=graceful
+```
+
+A streaming response (for example SSE) still open at stop ends the same way in both modes, and the same way as when
+a browser closes it: Starlette cancels the stream, so cleanup in its generator runs but is cut short at its first
+`await` unless it shields itself (`anyio.CancelScope(shield=True)`).
 
 ### AsyncTestClient
 
@@ -417,8 +441,9 @@ server = AsyncTestServer(
 - **Startup:** lifespan startup runs first, then the server starts serving. If either fails or takes longer than
   `startup_timeout`, `start()` releases everything acquired so far and raises `ServerStartupError`, chained to the
   application's own exception.
-- **Shutdown:** `stop()` closes the client, stops accepting connections, gives open connections (for example SSE
-  streams) `shutdown_timeout` to finish and then closes them, runs the lifespan shutdown, closes the socket and
+- **Shutdown:** `stop()` closes the client, stops HTTP (in the default `"fast"` mode it closes open connections at
+  once; in `"graceful"` mode they get `shutdown_timeout` to finish, see
+  [Fast and graceful shutdown](#fast-and-graceful-shutdown)), runs the lifespan shutdown, closes the socket and
   releases the port. If the lifespan shutdown fails or times out, `stop()` raises `ServerShutdownError` after all of
   that is done. If `stop()` is cancelled or a step fails, the remaining steps still run, without waiting, before the
   error propagates; on that path the lifespan is cancelled rather than shut down, so the code after its `yield` does

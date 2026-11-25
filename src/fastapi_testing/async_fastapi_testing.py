@@ -810,11 +810,13 @@ class UvicornTestServer(uvicorn.Server):
             yield
         finally:
             _signal_handlers.leave(self)
-        # uvicorn's handle_exit() records the signals in this private attribute.
-        # test_signal_stops_every_running_server_then_reaches_the_original_handler
-        # fails if a uvicorn release changes that.
-        for captured_signal in reversed(self._captured_signals):
-            signal.raise_signal(captured_signal)
+            # Also when serve() is cancelled (a fast stop), so a signal received
+            # just before stop() is not lost. uvicorn's handle_exit() records the
+            # signals in this private attribute;
+            # test_signal_stops_every_running_server_then_reaches_the_original_handler
+            # fails if a uvicorn release changes that.
+            for captured_signal in reversed(self._captured_signals):
+                signal.raise_signal(captured_signal)
 
 
 class _LifespanRunner:
@@ -1134,7 +1136,7 @@ class AsyncTestServer:
         uvicorn's own shutdown spends about 200 ms in fixed polling sleeps even
         when nothing is open. Here, in order:
 
-        1. Stop the server task and close the listening servers.
+        1. Close the listening servers and stop the server task.
         2. Close every open connection, which to the application is the client
            disconnecting: streaming handlers receive ``http.disconnect`` and end.
         3. Wait for requests still running, at most ``request_grace`` seconds,
@@ -1143,13 +1145,14 @@ class AsyncTestServer:
         if server is not None:
             server.should_exit = True
             server.force_exit = True
+            # Stop accepting first, so no request starts after the snapshot below.
+            # A server whose startup ended early may not have these yet.
+            for listener in getattr(server, "servers", ()):
+                listener.close()
         task.cancel()
         await asyncio.wait({task}, timeout=_LifespanRunner.cancel_timeout)
         if server is None:
             return
-        # A server whose startup ended early may not have these yet.
-        for listener in getattr(server, "servers", ()):
-            listener.close()
         # uvicorn tracks its protocol instances in server_state.connections; its own
         # shutdown() walks the same set. Closing the transport is a disconnect.
         for connection in list(getattr(getattr(server, "server_state", None), "connections", ())):

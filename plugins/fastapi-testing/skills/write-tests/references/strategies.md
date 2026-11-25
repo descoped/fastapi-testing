@@ -81,7 +81,8 @@ async def test_checkout_survives_a_payments_outage(server, payments):
 ```
 
 To simulate a slow upstream, `await asyncio.sleep(...)` in the fake route and give the app a short timeout through
-its settings. Servers stop in reverse order of fixture setup, so the app server stops before the fake it calls.
+its settings. The app's `server` fixture takes `payments` as a parameter (as `examples/conftest.py` does with `rates_server`), so
+pytest stops the app server before the fake it calls. Without that dependency the order is not guaranteed.
 
 ## Authentication
 
@@ -166,5 +167,6 @@ cancels them. Wait for the effect before the test ends.
 - **Lifespan shutdown**: its errors raise `ServerShutdownError` from `stop()`, so a test fails when the app's
   cleanup fails. To assert on cleanup, check the resource after the `async with` block.
 - **In-flight requests at shutdown**: use `shutdown="graceful"` (and a `shutdown_timeout` large enough). Start the
-  request as a task with your own `httpx.AsyncClient(base_url=server.base_url)`, call `await server.stop()` while it
-  runs, and assert that it completed. Under the default fast mode it would be cancelled after 0.5 s.
+  request as a task with your own `httpx.AsyncClient(base_url=server.base_url)`, wait until the handler has started
+  (it sets an `asyncio.Event`; a fixed sleep races on a slow machine), call `await server.stop()`, and assert that
+  the request completed. See `examples/test_example_lifecycle.py`. Under the default fast mode it would be cancelled after 0.5 s.

@@ -144,26 +144,19 @@ written by one test is visible to the next, so keep such tests read-only or rese
 ## Factory fixtures
 
 When tests need servers with different overrides or options, yield a factory, and let the fixture stop whatever it
-started:
+started. An `AsyncExitStack` stops every server, in reverse order, even when one `stop()` raises:
 
 ```python
 @pytest.fixture
 async def make_server() -> AsyncGenerator[Callable[..., Awaitable[AsyncTestServer]]]:
-    servers: list[AsyncTestServer] = []
+    async with AsyncExitStack() as stack:
 
-    async def make(overrides: Mapping[Callable[..., Any], Callable[..., Any]] | None = None) -> AsyncTestServer:
-        app = create_app()
-        app.dependency_overrides.update(overrides or {})  # keys are the dependency functions themselves
-        server = AsyncTestServer(app=app)
-        await server.start()
-        servers.append(server)
-        return server
+        async def make(overrides: Mapping[Callable[..., Any], Callable[..., Any]] | None = None) -> AsyncTestServer:
+            app = create_app()
+            app.dependency_overrides.update(overrides or {})  # keys are the dependency functions themselves
+            return await stack.enter_async_context(AsyncTestServer(app=app))
 
-    try:
         yield make
-    finally:
-        for server in reversed(servers):
-            await server.stop()
 
 
 async def test_with_a_failing_mailer(make_server):

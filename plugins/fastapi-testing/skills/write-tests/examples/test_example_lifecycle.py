@@ -28,21 +28,23 @@ async def test_a_failing_startup_raises_with_the_apps_error():
     with pytest.raises(ServerStartupError) as info:
         async with create_test_server(lifespan=lifespan):
             pass
-    assert isinstance(info.value.__cause__, RuntimeError)
+    assert str(info.value.__cause__) == "database unreachable"  # the app's own exception
 
 
 async def test_graceful_shutdown_lets_an_in_flight_request_finish():
     # The default "fast" stop cancels requests still running after 0.5 s. Use "graceful"
     # only for a test about shutdown behaviour itself.
     async with create_test_server(shutdown="graceful", shutdown_timeout=5) as server:
+        started = asyncio.Event()
 
         @server.app.get("/slow")
         async def slow():
+            started.set()
             await asyncio.sleep(0.3)
             return {"done": True}
 
         async with httpx.AsyncClient(base_url=server.base_url) as client:
             request = asyncio.create_task(client.get("/slow"))
-            await asyncio.sleep(0.1)
+            await asyncio.wait_for(started.wait(), timeout=5)  # the handler is running, not just queued
             await server.stop()  # stop while the request is running
             assert (await request).json() == {"done": True}
